@@ -2,7 +2,7 @@ import { DownloadTask, Status } from './DownloadTask';
 import { ObservableArray, type IObservable } from './Observable';
 import type { StoreableMediaContainer, MediaItem } from './providers/MediaPlugin';
 import type { StorageController } from './StorageController';
-import { Delay, SetTimeout } from './BackgroundTimers';
+import { Delay } from './BackgroundTimers';
 import type { DownloadHandle, DownloadOptions } from './DownloadContract';
 
 export class DownloadManager {
@@ -58,6 +58,11 @@ export class DownloadManager {
             if (active) return active.Handle;
             const task = new DownloadTask(container, this.storageController, snapshot);
             this.queue.Push(task);
+            if ((snapshot.retention ?? ((snapshot.owner ?? 'manual') === 'manual' ? 'keep' : 'release')) === 'release') {
+                task.Handle.completion.then(() => this.InvokeQueueTransaction(() => {
+                    this.queue.Value = this.queue.Value.filter(entry => entry !== task);
+                }));
+            }
             return task.Handle;
         });
         this.Process();
@@ -70,6 +75,7 @@ export class DownloadManager {
             if (task.IsFinished || !task.Media.IsSameAs(container)
                 || (previous.owner ?? 'manual') !== (options.owner ?? 'manual')
                 || previous.signal !== options.signal || previous.format !== options.format
+                || previous.existingFiles !== options.existingFiles
                 || previous.useWebsiteSubDirectory !== options.useWebsiteSubDirectory) continue;
             if (previous.directory === options.directory
                 || previous.directory && options.directory && await previous.directory.isSameEntry(options.directory)) return task;
@@ -99,20 +105,21 @@ export class DownloadManager {
         }
         this.processing = true;
 
-        while(this) {
-            let task: DownloadTask;
-            try {
-                task = await this.InvokeQueueTransaction(() => this.queue.Value.find(task => task.Status.Value === Status.Queued));
-                if(task) {
+        try {
+            while(true) {
+                let task: DownloadTask;
+                try {
+                    task = await this.InvokeQueueTransaction(() => this.queue.Value.find(task => task.Status.Value === Status.Queued));
+                    if (!task) break;
                     await task.Run();
-                } else {
-                    await new Promise<void>(resolve => SetTimeout(resolve, 750));
+                } catch(error) {
+                    task?.FailUnexpected(error);
                 }
-            } catch(error) {
-                task?.FailUnexpected(error);
             }
+        } finally {
+            this.processing = false;
+            // An enqueue may have arrived between the final lookup and this continuation.
+            if (this.queue.Value.some(task => task.Status.Value === Status.Queued)) this.Process();
         }
-
-        this.processing = false;
     }
 }

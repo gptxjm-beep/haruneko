@@ -298,6 +298,14 @@ describe('Download attempt contract', () => {
 });
 
 describe('Export writer commit boundary', () => {
+    it('Should preserve an existing output when the archive policy forbids replacement', async () => {
+        const stream = { write: vi.fn(), close: vi.fn(), abort: vi.fn() };
+        const existing = { createWritable: vi.fn().mockResolvedValue(stream) };
+        const directory = { getFileHandle: vi.fn().mockResolvedValue(existing) } as unknown as FileSystemDirectoryHandle;
+        const context = { signal: new AbortController().signal, existingFiles: 'preserve' as const, begin: vi.fn(), writing: vi.fn(), written: vi.fn() };
+        await expect(WriteExportFile(directory, 'same-name.cbz', new Blob(['replacement']), context)).rejects.toThrow('already exists');
+        expect(existing.createWritable).not.toHaveBeenCalled();
+    });
     it('Should not issue a receipt before close completes', async () => {
         let close: () => void;
         const stream = { write: vi.fn().mockResolvedValue(undefined), close: vi.fn(() => new Promise<void>(resolve => { close = resolve; })), abort: vi.fn().mockResolvedValue(undefined) };
@@ -350,6 +358,23 @@ describe('Export writer commit boundary', () => {
 });
 
 describe('DownloadManager handle API', () => {
+    it('Should release a large batch of completed archive tasks while preserving handles and manual history', async () => {
+        const f = fixture();
+        const manager = f.manager();
+        await manager.Enqueue(f.container);
+        const manual = manager.Queue.Value[0];
+        await manual.Handle.completion;
+        const handles = [];
+        for (let index = 0; index < 500; index++) {
+            const handle = await manager.EnqueueTask(f.container, { owner: `archive:${index}` });
+            handles.push(handle);
+        }
+        const results = await Promise.all(handles.map(handle => handle.completion));
+        await vi.waitFor(() => expect(manager.Queue.Value).toEqual([manual]));
+        expect(results.every(result => result.outcome === 'succeeded')).toBe(true);
+        expect(await handles[0].completion).toBe(results[0]);
+        expect(handles[0].status.Value).toBe(Status.Completed);
+    });
     it('Should permit new requests after failed and completed attempts', async () => {
         const f = fixture();
         const manager = f.manager();

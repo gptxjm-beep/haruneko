@@ -118,8 +118,8 @@ try {
             const firstManager = new DownloadManager(storage);
             const secondManager = new DownloadManager(storage);
             const handles = await Promise.all([
-                firstManager.EnqueueTask(chapter, { directory: archive, format: 'image/*', owner: 'first' }),
-                secondManager.EnqueueTask(chapter, { directory: archive, format: 'image/*', owner: 'second' }),
+                firstManager.EnqueueTask(chapter, { directory: archive, format: 'image/*', owner: 'first', existingFiles: 'replace' }),
+                secondManager.EnqueueTask(chapter, { directory: archive, format: 'image/*', owner: 'second', existingFiles: 'replace' }),
             ]);
             const attempts = await Promise.all(handles.map(handle => handle.completion));
             record('Independent managers serialize writes to the same physical output', peak === 1 && attempts.every(result => result.outcome === 'succeeded'));
@@ -132,7 +132,7 @@ try {
         let cleanupHandle;
         storage.RemoveTemporary = async () => { throw new Error('Synthetic cleanup failure'); };
         try {
-            cleanupHandle = await manager.EnqueueTask(chapter, { directory: archive, format: 'application/x-cbz', owner: 'cleanup-test' });
+            cleanupHandle = await manager.EnqueueTask(chapter, { directory: archive, format: 'application/x-cbz', owner: 'cleanup-test', existingFiles: 'replace' });
             const result = await cleanupHandle.completion;
             record('Cleanup failure preserves a readable written CBZ receipt', result.outcome === 'succeeded-with-warnings' && result.output.state === 'written' && (await result.output.files[0].handle.getFile()).size === result.output.files[0].size && result.cleanup.state === 'failed');
         } finally {

@@ -289,6 +289,7 @@ export class DownloadTask {
                 this.exportProgress.Value = Object.freeze({ state: 'preparing', expectedFiles: null, writtenFiles: 0 });
                 const context: ExportContext = {
                     signal: cancellator.signal,
+                    existingFiles: this.Options.existingFiles ?? ((this.Options.owner ?? 'manual') === 'manual' ? 'replace' : 'preserve'),
                     begin: (count, target) => {
                         this.expectedFiles = count;
                         this.outputTarget = { ...target };

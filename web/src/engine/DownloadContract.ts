@@ -8,6 +8,9 @@ export interface DownloadOptions {
     /** Independent callers must not share cancellation ownership. Defaults to manual. */
     readonly owner?: string;
     readonly signal?: AbortSignal;
+    /** Manual history is retained; owned automation is released by default. */
+    readonly retention?: 'keep' | 'release';
+    readonly existingFiles?: 'replace' | 'preserve';
 }
 
 export type DownloadStage = 'prepare' | 'fetch' | 'validation' | 'temporary-storage' | 'export' | 'verification' | 'cleanup' | 'internal';
@@ -25,6 +28,7 @@ export interface WrittenFile {
 
 export interface ExportContext {
     readonly signal: AbortSignal;
+    readonly existingFiles?: 'replace' | 'preserve';
     begin(expectedFiles: number, target?: { directory: FileSystemDirectoryHandle; format: string }): void;
     writing(path: string): void;
     written(file: WrittenFile): void;
