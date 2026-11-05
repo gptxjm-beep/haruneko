@@ -16,7 +16,7 @@ export interface ArchiveWorkChapter {
     id: string; title: string; position: number; language: string | null;
     expectedPages?: number; expectedPagesTrusted?: boolean; expectedPagesEvidence?: string;
 }
-export interface ArchiveWorkManga extends ArchiveMangaRecord { state: string; admitted: number; listings: number; next_retry: number; reason: string }
+export interface ArchiveWorkManga extends ArchiveMangaRecord { state: string; admitted: number; listed: number; listings: number; next_retry: number; reason: string }
 export interface ArchiveWorkItem extends ArchiveWorkChapter { state: string; attempts: number; chapter_key: string; next_retry: number; reason: string; expected_pages: number | null; expected_trusted: number; pages_evidence: string }
 export interface ArchiveRunSnapshot {
     sessionId: string; state: ArchiveRunState; policy: ArchivePolicy; catalogDone: boolean; catalogPages: number;

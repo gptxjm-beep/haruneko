@@ -69,6 +69,37 @@
         if (exportedResult.outcome !== 'succeeded') throw new Error(exportedResult.errors.map(item => item.error.message).join('; '));
         record(`Native ${format} uses the original exporter and SHA-256 receipts`, exportedResult.verification.method === 'sha256' && exportedResult.output.files.length === 1);
     }
+    const { ArchiveManager } = await import('/src/engine/archive/ArchiveManager.ts');
+    const { EngineArchiveSource } = await import('/src/engine/archive/ArchiveSource.ts');
+    plugin.CreateEntry = (id, title) => new Manga(scraper, plugin, id, title);
+    plugin.Tags = { Value: [] };
+    const visited = [];
+    scraper.FetchChapters = async manga => ['new', 'old'].map(id => {
+        const entry = new Chapter(scraper, manga, id, id === 'old' ? 'Decimal 1.5' : 'Special');
+        entry.IsStored.Value = true; // Read/stored markers never exclude archive work.
+        return entry;
+    });
+    scraper.FetchPages = async chapter => {
+        visited.push(`${chapter.Parent.Identifier}/${chapter.Identifier}`);
+        return [new Page(scraper, chapter, new URL('https://example.invalid/local-image'))];
+    };
+    const nativeSource = new EngineArchiveSource(plugin);
+    const source = { site: plugin,
+        Catalog: async function* () { yield { items: [{ id: 'manager-a', title: 'Manager A' }, { id: 'manager-b', title: 'Manager B' }], terminal: true,
+            coverage: { state: 'complete', evidence: 'Isolated two-manga fixture manifest' } }; },
+        Chapters: (manga, signal) => nativeSource.Chapters(manga, signal),
+    };
+    const coordinatorSession = await client.Request({ operation: 'create-session', rootId: grant.rootId, siteId: 'site', siteName: 'Site', settings });
+    const policy = { maxMangas: 2, maxChapters: 4, delayMs: 100, retryDelayMs: 1000, maxAttempts: 2, languages: [], unknownLanguage: 'include' };
+    const firstCoordinator = new ArchiveManager(plugin, manager, client, coordinatorSession, policy, { source, beforeCapacity: async checkpoint => {
+        if (checkpoint.phase === 'before-temporary-write') void firstCoordinator.Pause();
+    } });
+    record('Coordinator gracefully pauses after its first native chapter receipt', (await firstCoordinator.Start()).state === 'paused' && visited.length === 1);
+    const resumed = new ArchiveManager(plugin, manager, client, coordinatorSession, policy, { source });
+    const resumedState = await resumed.Resume();
+    record('Coordinator resumes through SQLite and original DownloadManager without re-fetching healthy files', resumedState.counts.healthy === 4 && visited.length === 4);
+    record('Coordinator processes each native manga oldest-first, including read-marked chapters', visited.join(',') === 'manager-a/old,manager-a/new,manager-b/old,manager-b/new');
+    record('Native connector chapter-list uncertainty remains reviewable', resumedState.state === 'review');
     for (let retry = 0; manager.Queue.Value.length && retry < 50; retry++) await new Promise(resolve => setTimeout(resolve, 10));
     record('Completed archive tasks do not remain in manager history', manager.Queue.Value.length === 0);
     return checks;

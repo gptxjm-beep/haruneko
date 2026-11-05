@@ -39,6 +39,49 @@ function directory(id: string): FileSystemDirectoryHandle {
 }
 
 describe('Download attempt contract', () => {
+    it('Should cancel a paced archive without waiting for the next long request delay', async () => {
+        vi.useFakeTimers();
+        try {
+            const f = fixture();
+            f.media.Entries.Value = [f.item, f.item];
+            const task = f.task({ pageDelayMs: 60_000, archiveTarget: { identity: 'archive', rootId: 'root', format: 'application/x-cbz', useWebsiteSubDirectory: false,
+                checkpoint: async () => {}, beginExport: async () => {}, write: async () => { throw new Error('Cancelled before export'); } } });
+            const running = task.Run();
+            let settled = false;
+            task.Handle.completion.then(() => { settled = true; });
+            await vi.advanceTimersByTimeAsync(100);
+            task.Handle.cancel('Caller cancelled archive');
+            await vi.advanceTimersByTimeAsync(50);
+            expect(settled).toBe(true);
+            expect(f.item.Fetch).toHaveBeenCalledTimes(1);
+            await running;
+        } finally { await vi.runAllTimersAsync(); vi.useRealTimers(); }
+    });
+    it('Should pace archive pages serially and call the temporary capacity checkpoint', async () => {
+        const f = fixture();
+        const starts: number[] = [];
+        let active = 0;
+        let maximum = 0;
+        const fetch = async () => {
+            starts.push(Date.now()); maximum = Math.max(maximum, ++active);
+            await new Promise(resolve => setTimeout(resolve, 5));
+            active--; return f.data;
+        };
+        f.media.Entries.Value = [{ Fetch: vi.fn(fetch) }, { Fetch: vi.fn(fetch) }, { Fetch: vi.fn(fetch) }];
+        f.media.Store.mockImplementation(async (_resources, options) => {
+            await options.context.begin(1);
+            options.context.written({ path: 'chapter.cbz', size: f.data.size, rootId: 'root', fileId: 'file', sha256: 'a'.repeat(64) });
+        });
+        const beforeTemporaryWrite = vi.fn().mockResolvedValue(undefined);
+        const task = f.task({ pageDelayMs: 100, beforeTemporaryWrite, archiveTarget: { identity: 'archive', rootId: 'root', format: 'application/x-cbz', useWebsiteSubDirectory: false,
+            checkpoint: async () => {}, beginExport: async () => {}, write: async () => { throw new Error('Not used by fixture'); } } });
+        await task.Run();
+        expect((await task.Handle.completion).outcome).toBe('succeeded');
+        expect(maximum).toBe(1);
+        expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(80);
+        expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(80);
+        expect(beforeTemporaryWrite).toHaveBeenCalledTimes(3);
+    });
     it('Should resolve with separately verified write and cleanup receipts', async () => {
         const f = fixture();
         const task = f.task();

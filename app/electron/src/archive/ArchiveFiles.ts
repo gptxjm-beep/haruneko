@@ -8,12 +8,13 @@ import { Count, RelativePath, ResolveArchivePath, Fingerprint, SafeMessage, Erro
 import type { ArchiveFileReceipt, ArchiveRecovery } from './ArchiveProtocol';
 
 type Write = { fileId: string; attemptId: string; size: number; received: number; hash: Hash; handle?: FileHandle; existing: boolean };
+export type ArchiveFileCapacityGuard = (phase: 'before-staging' | 'before-publication', rootId: string, bytes: number) => Promise<void>;
 
 /** Only app-owned staging files are writable. Publication always uses COPYFILE_EXCL. */
 export class ArchiveFiles {
     private readonly writes = new Map<string, Write>();
 
-    constructor(private readonly repository: ArchiveRepository) {}
+    constructor(private readonly repository: ArchiveRepository, private readonly capacityGuard?: ArchiveFileCapacityGuard) {}
 
     public async Begin(attemptId: string, relative: string, size: number): Promise<string> {
         if (this.writes.size >= 32) throw new Error('Too many active archive writes');
@@ -37,6 +38,7 @@ export class ArchiveFiles {
                 if (actual.size !== file.size || actual.sha256 !== file.sha256 || size !== file.size) throw new Error('Existing output differs from the expected file; review required');
                 this.writes.set(token, { fileId: file.id, attemptId, size, received: 0, hash: createHash('sha256'), existing: true });
             } else {
+                await this.capacityGuard?.('before-staging', attempt.root_id, size);
                 try { await lstat(staging); throw new Error('Interrupted staging file requires review or recovery'); }
                 catch(error) { if (ErrorCode(error) !== 'ENOENT') throw error; }
                 file = this.repository.ResetMissingFile(file.id, attemptId, size);
@@ -118,6 +120,7 @@ export class ArchiveFiles {
         const file = this.repository.File(fileId);
         if (!file.sha256 || !file.staging) throw new Error('Staged file has no durable fingerprint');
         const root = this.repository.VerifyRoot(file.root_id);
+        await this.capacityGuard?.('before-publication', file.root_id, Number(file.size));
         const staged = await Fingerprint(this.repository.StagingDirectory, file.staging);
         if (staged.size !== file.size || staged.sha256 !== file.sha256) throw new Error('Staging fingerprint mismatch');
         const target = await ResolveArchivePath(root, file.path, true);

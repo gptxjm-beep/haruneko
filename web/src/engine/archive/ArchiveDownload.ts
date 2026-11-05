@@ -11,7 +11,7 @@ export type ArchiveChapterSubmission =
 
 /** A single-chapter adapter, not a site scheduler. Never guesses that uncertain files are replaceable. */
 export async function EnqueueArchiveChapter(manager: DownloadManager, client: ArchiveClient, sessionId: string, chapter: Chapter,
-    registration: ChapterRegistration, options: { signal?: AbortSignal; reviewedRetry?: boolean } = {}): Promise<ArchiveChapterSubmission> {
+    registration: ChapterRegistration, options: { signal?: AbortSignal; reviewedRetry?: boolean; pageDelayMs?: number; beforeTemporaryWrite?: (bytes: number) => Promise<void> } = {}): Promise<ArchiveChapterSubmission> {
     if (registration.siteId !== chapter.Parent?.Parent?.Identifier || registration.mangaId !== chapter.Parent?.Identifier || registration.chapterId !== chapter.Identifier) throw new Error('Archive identity does not match the selected chapter');
     const session = await client.Request<{ root_id: string; settings: { format: string; useWebsiteSubDirectory: boolean } }>({ operation: 'session', sessionId });
     const chapterKey = await client.Request<string>({ operation: 'register-chapter', sessionId, chapter: registration });
@@ -22,7 +22,8 @@ export async function EnqueueArchiveChapter(manager: DownloadManager, client: Ar
     let original: DownloadHandle;
     try {
         original = await manager.EnqueueTask(chapter, { archiveTarget: target, format: target.format, useWebsiteSubDirectory: target.useWebsiteSubDirectory,
-            owner: `archive:${sessionId}`, signal: options.signal, retention: 'release', existingFiles: 'preserve' });
+            owner: `archive:${sessionId}`, signal: options.signal, retention: 'release', existingFiles: 'preserve', pageDelayMs: options.pageDelayMs,
+            beforeTemporaryWrite: options.beforeTemporaryWrite });
     } catch(error) {
         await client.Request({ operation: 'finish-attempt', attemptId, result: { outcome: 'failed', receivedPages: 0, validatedPages: 0,
             outputState: 'not-started', verification: 'not-performed', cleanupState: 'not-needed', cleanupKeys: [], errors: [{ stage: 'repository', message: String(error) }] } });

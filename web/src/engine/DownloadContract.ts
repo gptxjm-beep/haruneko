@@ -12,9 +12,14 @@ export interface DownloadOptions {
     readonly retention?: 'keep' | 'release';
     readonly existingFiles?: 'replace' | 'preserve';
     readonly archiveTarget?: NativeArchiveTarget;
+    /** Bounded archive page fetching; absent for existing manual callers. */
+    readonly pageDelayMs?: number;
+    readonly beforeTemporaryWrite?: (bytes: number) => Promise<void>;
 }
 
 export class ArchivePersistenceError extends Error {}
+/** A future capacity gate can stop the coordinator rather than treating low space as a bad chapter. */
+export class ArchiveCapacityError extends Error {}
 
 export interface NativeArchiveTarget {
     readonly identity: string;

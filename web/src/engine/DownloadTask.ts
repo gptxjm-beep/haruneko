@@ -4,7 +4,7 @@ import type { StorageController } from './StorageController';
 import { type IObservable, Observable, ObservableArray } from './Observable';
 import type { DownloadOptions, DownloadHandle, DownloadResult, DownloadError, DownloadStage, ExportContext, WrittenFile, ExportProgress, CleanupRetryResult } from './DownloadContract';
 import { ImageValidationError, IsValidatedImage } from './ValidateImage';
-import { ArchivePersistenceError } from './DownloadContract';
+import { ArchivePersistenceError, ArchiveCapacityError } from './DownloadContract';
 
 export const enum Status {
     Paused = 'paused',
@@ -16,6 +16,14 @@ export const enum Status {
 }
 
 export class DownloadTask {
+    private WaitForArchivePage(milliseconds: number, signal: AbortSignal): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason); };
+            const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, milliseconds);
+            signal.addEventListener('abort', abort, { once: true });
+            if (signal.aborted) abort();
+        });
+    }
 
     public readonly ID = Symbol();
     public readonly Created = new Date();
@@ -270,7 +278,8 @@ export class DownloadTask {
             stage = 'repository';
             if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('fetch', 0, 0);
             stage = 'fetch';
-            const promises = this.Media.Entries.Value.map(async (item, index: number) => {
+            if (this.Options.pageDelayMs !== undefined && (!this.Options.archiveTarget || !Number.isFinite(this.Options.pageDelayMs) || this.Options.pageDelayMs < 100 || this.Options.pageDelayMs > 60_000)) throw new Error('Invalid archive page delay');
+            const fetch = async (item: MediaItem, index: number) => {
                 let itemStage: DownloadStage = 'fetch';
                 try {
                     cancellator.signal.throwIfAborted();
@@ -279,6 +288,8 @@ export class DownloadTask {
                     this.receivedPages++;
                     if (IsValidatedImage(data)) this.validatedPages++;
                     itemStage = 'temporary-storage';
+                    if (this.Options.beforeTemporaryWrite) await this.Options.beforeTemporaryWrite(data.size);
+                    cancellator.signal.throwIfAborted();
                     const resource = await this.storageController.SaveTemporary(data);
                     resourcemap.set(index, resource);
                     this.UpdateProgress(resourcemap.size);
@@ -290,8 +301,18 @@ export class DownloadTask {
                     // TODO: Abort all other pending downloads or keep running?
                     throw error;
                 }
-            });
-            await Promise.allSettled(promises);
+            };
+            if (this.Options.pageDelayMs === undefined) {
+                await Promise.allSettled(this.Media.Entries.Value.map(fetch));
+            } else {
+                // Do not enqueue every page in a second task pool: its throttle timer is not abortable.
+                for (let index = 0; index < this.Media.Entries.Value.length; index++) {
+                    cancellator.signal.throwIfAborted();
+                    if (index) await this.WaitForArchivePage(this.Options.pageDelayMs, cancellator.signal);
+                    try { await fetch(this.Media.Entries.Value[index], index); }
+                    catch(error) { if (error instanceof ArchiveCapacityError) break; /* fetch already records the stage and cause. */ }
+                }
+            }
             this.fetchState = cancellator.signal.aborted ? 'cancelled'
                 : this.stageErrors.some(error => error.stage === 'fetch' || error.stage === 'validation') ? 'failed' : 'succeeded';
             cancellator.signal.throwIfAborted();

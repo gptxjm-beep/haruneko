@@ -72,6 +72,7 @@ export class ArchiveWorkRepository {
             this.Transaction(() => {
                 this.database.prepare(`INSERT INTO archive_runs(session_id,state,policy,epoch) VALUES(?,'running',?,1)
                     ON CONFLICT(session_id) DO UPDATE SET state='running',epoch=epoch+1,reason=''`).run(sessionId, JSON.stringify(policy));
+                this.database.prepare("UPDATE archive_mangas SET state='review',retryable=0,reason='Interrupted chapter listing exhausted its attempt budget' WHERE session_id=? AND state='listing' AND listings>=?").run(sessionId, policy.maxAttempts);
                 this.database.prepare("UPDATE archive_mangas SET state='pending' WHERE session_id=? AND state='listing'").run(sessionId);
                 this.database.prepare("UPDATE archive_mangas SET state='ready' WHERE session_id=? AND listed=1 AND state IN ('done','review') AND retryable=0").run(sessionId);
                 this.database.prepare("UPDATE archive_work SET state='pending' WHERE session_id=? AND state='downloading'").run(sessionId);
