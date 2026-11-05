@@ -79,4 +79,59 @@ describe('ValidateImage', () => {
         expect(await ValidateImage(data)).toBe(data);
         expect(decode).toHaveBeenCalledTimes(1);
     });
+
+    it('Should bound concurrent decoding when many pages arrive together', async () => {
+        let active = 0;
+        let peak = 0;
+        decode.mockImplementation(async () => {
+            peak = Math.max(peak, ++active);
+            await new Promise(resolve => setTimeout(resolve, 10));
+            active--;
+        });
+        await Promise.all(Array.from({ length: 12 }, () => ValidateImage(new Blob([png]))));
+        expect(peak).toBeLessThanOrEqual(4);
+    });
+
+    it('Should stop waiting for decoding and release its URL on cancellation', async () => {
+        let started: () => void;
+        const decoding = new Promise<void>(resolve => { started = resolve; });
+        decode.mockImplementation(() => { started(); return new Promise(() => {}); });
+        const controller = new AbortController();
+        const revoke = vi.spyOn(URL, 'revokeObjectURL');
+        try {
+            const result = ValidateImage(new Blob([png]), controller.signal);
+            const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' });
+            await decoding;
+            controller.abort();
+            await rejected;
+            expect(revoke).toHaveBeenCalledTimes(1);
+        } finally {
+            revoke.mockRestore();
+        }
+    }, 1000);
+
+    it('Should not start decoding an already cancelled page', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        await expect(ValidateImage(new Blob([png]), controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+        expect(decode).not.toHaveBeenCalled();
+    });
+
+    it('Should cancel a queued validation without waiting for active decodes', async () => {
+        const releases: (() => void)[] = [];
+        decode.mockImplementation(() => new Promise<void>(resolve => { releases.push(resolve); }));
+        const running = Array.from({ length: 4 }, () => ValidateImage(new Blob([png])));
+        await vi.waitFor(() => expect(releases).toHaveLength(4));
+        const controller = new AbortController();
+        const queued = ValidateImage(new Blob([png]), controller.signal);
+        const rejected = expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+        controller.abort();
+        try {
+            await rejected;
+            expect(decode).toHaveBeenCalledTimes(4);
+        } finally {
+            releases.forEach(release => release());
+            await Promise.all(running);
+        }
+    });
 });

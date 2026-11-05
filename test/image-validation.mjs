@@ -13,6 +13,12 @@ const server = await createServer({
     configFile: false,
     plugins: [...config.plugins, {
         name: 'local-image-validation-page',
+        resolveId(id) {
+            if (id === '/__viewer-runtime') return '\0viewer-runtime';
+        },
+        load(id) {
+            if (id === '\0viewer-runtime') return "export { mount, unmount, tick } from 'svelte';";
+        },
         configureServer(server) {
             server.middlewares.use((request, response, next) => {
                 if (request.url !== '/__image-validation') return next();
@@ -90,6 +96,38 @@ try {
         results.push({ name: 'Invalid required page prevents chapter export', passed: mixed.task.Status.Value === 'failed' && !mixed.exported && mixed.saved.length === 1 && mixed.cleaned.length === 1 });
         const cleanup = await download([png], true);
         results.push({ name: 'Cleanup failure terminates task with its error', passed: cleanup.task.Status.Value === 'failed' && cleanup.exported && cleanup.task.Errors.Value[0].message === 'Simulated cleanup failure' });
+        const { mount, unmount, tick } = await import('/__viewer-runtime');
+        const { default: ImageViewer } = await import('/src/frontend/classic/components/viewer/Image.svelte');
+        const target = document.createElement('div');
+        document.body.append(target);
+        let viewSignal;
+        let finish;
+        const unhandled = [];
+        const onUnhandled = event => { unhandled.push(event.reason); };
+        window.addEventListener('unhandledrejection', onUnhandled);
+        const viewer = mount(ImageViewer, {
+            target,
+            props: {
+                page: { Fetch: (_priority, signal) => {
+                    viewSignal = signal;
+                    return new Promise((resolve, reject) => {
+                        finish = resolve;
+                        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                    });
+                } },
+                alt: 'Local cancellation regression',
+                wide: false,
+            },
+        });
+        await tick();
+        await unmount(viewer);
+        results.push({ name: 'Viewer cancels pending image work on disposal', passed: viewSignal?.aborted === true });
+        finish(svg);
+        await tick();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        results.push({ name: 'Viewer cancellation does not leave unhandled rejections', passed: unhandled.length === 0 });
+        window.removeEventListener('unhandledrejection', onUnhandled);
+        target.remove();
         return results;
     });
     for (const result of results) assert.equal(result.passed, true, result.name);

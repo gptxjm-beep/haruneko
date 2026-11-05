@@ -14,17 +14,17 @@
     }
 
     let { page, alt, wide, onLoad }: Props = $props();
-    let dataload: Promise<Blob> = $derived(page.Fetch(Priority.High, new AbortController().signal));
+    const cancellation = new AbortController();
+    let dataload: Promise<Blob> = $derived(page.Fetch(Priority.High, cancellation.signal));
     let image: HTMLImageElement = $state();
 
     $effect(() => {
-        dataload.then(() => onLoad?.());
+        dataload.then(() => onLoad?.(), () => { /* Error is displayed by the await block. */ });
     });
 
     onDestroy(() => {
-        dataload.then((_src) => {
-            URL.revokeObjectURL(image?.src);
-        });
+        cancellation.abort();
+        if (image?.src) URL.revokeObjectURL(image.src);
     });
 
     function downloadImage(data: Blob) {

@@ -214,6 +214,6 @@ export class Page<T extends JSONObject = JSONObject> extends MediaItem {
     }
 
     public async Fetch(priority: Priority, signal: AbortSignal): Promise<Blob> {
-        return ValidateImage(await this.scraper.FetchImage(this, priority, signal));
+        return ValidateImage(await this.scraper.FetchImage(this, priority, signal), signal, priority);
     }
 }
