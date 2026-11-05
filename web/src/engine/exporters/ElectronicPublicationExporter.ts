@@ -1,6 +1,8 @@
 import JSZip from 'jszip';
 import { MangaExporter } from './MangaExporter';
 import { SanitizeFileName } from '../StorageController';
+import type { ExportContext } from '../DownloadContract';
+import { WriteExportFile } from './WriteExportFile';
 
 export class ElectronicPublicationExporter extends MangaExporter {
 
@@ -178,7 +180,7 @@ export class ElectronicPublicationExporter extends MangaExporter {
         */
     }
 
-    public override async Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, _mangaTitle?: string): Promise<void> {
+    public override async Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, _mangaTitle?: string, context?: ExportContext): Promise<void> {
 
         const zip = new JSZip();
         // FIXME: Cannot be extracted on MacOS when name is missing an file extension
@@ -196,6 +198,7 @@ export class ElectronicPublicationExporter extends MangaExporter {
         const opf = this.CreatePackageFile(uid, chapterTitle, 'UND');
 
         const promises = new Array(sourceFileList.size).fill(null).map(async (_, index) => {
+            context?.signal.throwIfAborted();
             const page = index + 1;
             const pageFileName = page + '.xhtml';
             const { name: imageFileName, data } = await super.ReadTempImageData(sourceFileList.get(index), index, digits);
@@ -208,15 +211,15 @@ export class ElectronicPublicationExporter extends MangaExporter {
             opf.add(page, pageFileName, imageFileName, data.type);
         });
 
-        await Promise.all(promises);
+        const results = await Promise.allSettled(promises);
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
 
         oebps.file('toc.ncx', ncx.serialize(), { compression: 'DEFLATE' });
         oebps.file('toc.xhtml', toc.serialize(), { compression: 'DEFLATE' });
         oebps.file('content.opf', opf.serialize(), { compression: 'DEFLATE' });
 
-        const file = await targetDirectory.getFileHandle(SanitizeFileName(chapterTitle + '.epub'), { create: true });
-        const stream = await file.createWritable();
-        await stream.write(await zip.generateAsync({ type: 'blob' }));
-        await stream.close();
+        context?.signal.throwIfAborted();
+        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.epub'), await zip.generateAsync({ type: 'blob' }), context);
     }
 }

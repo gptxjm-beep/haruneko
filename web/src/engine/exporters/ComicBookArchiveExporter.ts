@@ -1,6 +1,8 @@
 import JSZip from 'jszip';
 import { MangaExporter } from './MangaExporter';
 import { SanitizeFileName } from '../StorageController';
+import type { ExportContext } from '../DownloadContract';
+import { WriteExportFile } from './WriteExportFile';
 
 export class ComicBookArchiveExporter extends MangaExporter {
 
@@ -21,20 +23,19 @@ export class ComicBookArchiveExporter extends MangaExporter {
         return this.xmlSerializer.serializeToString(xml);
     }
 
-    public override async Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, mangaTitle?: string): Promise<void> {
+    public override async Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, mangaTitle?: string, context?: ExportContext): Promise<void> {
         const zip = new JSZip();
         const digits = sourceFileList.size.toString().length;
 
         zip.file('ComicInfo.xml', this.CreateComicInfo(chapterTitle, mangaTitle ?? chapterTitle), { compression: 'DEFLATE' });
 
         for(const [ index, tempfile ] of sourceFileList) {
+            context?.signal.throwIfAborted();
             const { name, data } = await super.ReadTempImageData(tempfile, index, digits);
             zip.file(name, data, { compression: 'STORE' });
         }
 
-        const file = await targetDirectory.getFileHandle(SanitizeFileName(chapterTitle + '.cbz'), { create: true });
-        const stream = await file.createWritable();
-        await stream.write(await zip.generateAsync({ type: 'blob' }));
-        await stream.close();
+        context?.signal.throwIfAborted();
+        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.cbz'), await zip.generateAsync({ type: 'blob' }), context);
     }
 }

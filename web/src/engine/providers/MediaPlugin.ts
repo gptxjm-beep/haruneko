@@ -6,6 +6,7 @@ import icon from '../../img/media.webp';
 import { NotImplementedError } from '../Error';
 import { FetchWindowScript } from '../platform/FetchProvider';
 import { Observable, ObservableArray, type IObservable } from '../Observable';
+import type { StoreOptions } from '../DownloadContract';
 
 export type MediaChild = MediaContainer<MediaChild> | MediaItem;
 
@@ -103,7 +104,7 @@ export abstract class MediaContainer<T extends MediaChild> {
 export abstract class StoreableMediaContainer<T extends MediaItem> extends MediaContainer<T> {
 
     public abstract get IsStored(): IObservable<boolean, MediaContainer<T>>;
-    public abstract Store(resources: Map<number, string>): Promise<void>;
+    public abstract Store(resources: Map<number, string>, options?: StoreOptions): Promise<void>;
 }
 
 export abstract class MediaScraper<T extends MediaContainer<MediaChild>> {

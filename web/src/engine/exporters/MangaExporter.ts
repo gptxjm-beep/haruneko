@@ -1,4 +1,5 @@
 import { type StorageController } from '../StorageController';
+import type { ExportContext } from '../DownloadContract';
 
 // See: https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Image_types
 const mimeFileExtension = {
@@ -22,5 +23,5 @@ export abstract class MangaExporter {
         return { name, data };
     }
 
-    public abstract Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, mangaTitle?: string): Promise<void>;
+    public abstract Export(sourceFileList: Map<number, string>, targetDirectory: FileSystemDirectoryHandle, chapterTitle: string, mangaTitle?: string, context?: ExportContext): Promise<void>;
 }

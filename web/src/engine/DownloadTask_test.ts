@@ -211,6 +211,7 @@ describe('DownloadTask', () => {
             const testee = fixture.CreateTestee();
 
             const promise = testee.Run();
+            await Promise.resolve(); // Let fetches start before testing active cancellation.
             testee.Abort();
             await promise;
 

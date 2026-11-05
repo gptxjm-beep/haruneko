@@ -1,6 +1,14 @@
 import { TaskPool, Priority } from './taskpool/TaskPool';
 
 const validationPool = new TaskPool(4);
+const validatedImages = new WeakSet<Blob>();
+
+export class ImageValidationError extends Error {}
+
+/** This marker does not retain images or skip future validation. */
+export function IsValidatedImage(data: Blob): boolean {
+    return validatedImages.has(data);
+}
 
 function AwaitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
     if (!signal) return operation;
@@ -27,7 +35,7 @@ export async function ValidateImage(data: Blob, signal?: AbortSignal, priority: 
 
 async function DecodeImage(data: Blob, signal?: AbortSignal): Promise<Blob> {
     signal?.throwIfAborted();
-    if (!data?.size) throw new Error('Downloaded page is empty or missing');
+    if (!data?.size) throw new ImageValidationError('Downloaded page is empty or missing');
 
     const header = new Uint8Array(await data.slice(0, 64).arrayBuffer());
     signal?.throwIfAborted();
@@ -41,7 +49,7 @@ async function DecodeImage(data: Blob, signal?: AbortSignal): Promise<Blob> {
     else if (String.fromCharCode(...header.slice(4, 8)) === 'ftyp' && /avif|avis/.test(String.fromCharCode(...header.slice(8)))) type = 'image/avif';
     else if (startsWith(0x00, 0x00, 0x01, 0x00)) type = 'image/x-icon';
     else if (data.type.startsWith('image/')) type = data.type;
-    else throw new Error('Downloaded page is not a recognized image');
+    else throw new ImageValidationError('Downloaded page is not a recognized image');
 
     const imageData = type === data.type ? data : data.slice(0, data.size, type);
     const url = URL.createObjectURL(imageData);
@@ -51,10 +59,11 @@ async function DecodeImage(data: Blob, signal?: AbortSignal): Promise<Blob> {
         await AwaitWithAbort(image.decode(), signal);
         signal?.throwIfAborted();
         if (!image.naturalWidth || !image.naturalHeight) throw new Error('Image has no dimensions');
+        validatedImages.add(imageData);
         return imageData;
     } catch(cause) {
         signal?.throwIfAborted();
-        throw new Error('Downloaded page could not be decoded as an image', { cause });
+        throw new ImageValidationError('Downloaded page could not be decoded as an image', { cause });
     } finally {
         image.src = '';
         URL.revokeObjectURL(url);

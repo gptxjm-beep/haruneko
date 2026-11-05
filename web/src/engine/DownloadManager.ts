@@ -3,6 +3,7 @@ import { ObservableArray, type IObservable } from './Observable';
 import type { StoreableMediaContainer, MediaItem } from './providers/MediaPlugin';
 import type { StorageController } from './StorageController';
 import { Delay, SetTimeout } from './BackgroundTimers';
+import type { DownloadHandle, DownloadOptions } from './DownloadContract';
 
 export class DownloadManager {
 
@@ -19,11 +20,11 @@ export class DownloadManager {
     /**
      * Perform an (almost) thread/concurrency safe operation on {@link queue}
      */
-    private async InvokeQueueTransaction<R>(transaction: () => R): Promise<R> {
+    private async InvokeQueueTransaction<R>(transaction: () => R | Promise<R>): Promise<R> {
         try {
             while(this.queueTransactionLock) await Delay(5);
             this.queueTransactionLock = true;
-            return transaction();
+            return await transaction();
         } finally {
             this.queueTransactionLock = false;
         }
@@ -34,13 +35,45 @@ export class DownloadManager {
      * Only containers that are not present in the download queue will be added.
      */
     public async Enqueue(...containers: StoreableMediaContainer<MediaItem>[]): Promise<void> {
-        await this.InvokeQueueTransaction(() => {
-            const tasks = containers.distinct()
-                .filter(container => this.queue.Value.none(task => task.Media.IsSameAs(container)))
-                .map(container => new DownloadTask(container, this.storageController));
+        await this.InvokeQueueTransaction(async () => {
+            const tasks: DownloadTask[] = [];
+            for (const container of containers.distinct()) {
+                // Preserve legacy deduplication, including terminal manual tasks. Explicit
+                // retries use EnqueueTask, which only deduplicates active attempts.
+                const existing = this.queue.Value.some(task => task.Media.IsSameAs(container)
+                    && (task.Options.owner ?? 'manual') === 'manual' && !task.Options.directory
+                    && task.Options.format === undefined && task.Options.useWebsiteSubDirectory === undefined);
+                if (!existing) tasks.push(new DownloadTask(container, this.storageController));
+            }
             this.queue.Push(...tasks);
         });
         this.Process();
+    }
+
+    /** Enqueue an owned attempt; terminal attempts never block an explicit new request. */
+    public async EnqueueTask(container: StoreableMediaContainer<MediaItem>, options: DownloadOptions = {}): Promise<DownloadHandle> {
+        const snapshot = Object.freeze({ ...options });
+        const handle = await this.InvokeQueueTransaction(async () => {
+            const active = await this.FindActive(container, snapshot);
+            if (active) return active.Handle;
+            const task = new DownloadTask(container, this.storageController, snapshot);
+            this.queue.Push(task);
+            return task.Handle;
+        });
+        this.Process();
+        return handle;
+    }
+
+    private async FindActive(container: StoreableMediaContainer<MediaItem>, options: DownloadOptions): Promise<DownloadTask> {
+        for (const task of this.queue.Value) {
+            const previous = task.Options;
+            if (task.IsFinished || !task.Media.IsSameAs(container)
+                || (previous.owner ?? 'manual') !== (options.owner ?? 'manual')
+                || previous.signal !== options.signal || previous.format !== options.format
+                || previous.useWebsiteSubDirectory !== options.useWebsiteSubDirectory) continue;
+            if (previous.directory === options.directory
+                || previous.directory && options.directory && await previous.directory.isSameEntry(options.directory)) return task;
+        }
     }
 
     /**
@@ -51,7 +84,7 @@ export class DownloadManager {
         await this.InvokeQueueTransaction(() => {
             this.queue.Value = this.queue.Value.filter(task => {
                 if(tasks.includes(task)) {
-                    task.Abort();
+                    task.Cancel();
                     return false;
                 } else {
                     return true;
@@ -67,14 +100,17 @@ export class DownloadManager {
         this.processing = true;
 
         while(this) {
+            let task: DownloadTask;
             try {
-                const task = await this.InvokeQueueTransaction(() => this.queue.Value.find(task => task.Status.Value === Status.Queued));
+                task = await this.InvokeQueueTransaction(() => this.queue.Value.find(task => task.Status.Value === Status.Queued));
                 if(task) {
                     await task.Run();
                 } else {
                     await new Promise<void>(resolve => SetTimeout(resolve, 750));
                 }
-            } catch { /* IGNORE */ }
+            } catch(error) {
+                task?.FailUnexpected(error);
+            }
         }
 
         this.processing = false;
