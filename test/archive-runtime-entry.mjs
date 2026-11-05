@@ -120,7 +120,10 @@ if (process.argv[2] === 'crash-child') {
         await check(`Completed local output detects ${kind}`, async () => {
             const f = await fixture();
             try {
+                f.repository.RegisterChapter(f.session, registration('chapter', true));
                 await write(f);
+                await f.files.Recover(f.session, f.chapter, true);
+                assert.equal(f.repository.Chapter(f.session, f.chapter).state, 'Completed');
                 const target = path.join(f.root, 'Manga/chapter.cbz');
                 if (kind === 'deleted') await fs.unlink(target);
                 else await fs.writeFile(target, kind === 'different-size' ? 'longer-data' : 'evil');

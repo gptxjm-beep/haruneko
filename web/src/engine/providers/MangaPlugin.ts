@@ -183,26 +183,27 @@ export class Chapter extends StoreableMediaContainer<Page> {
 
     public async Store(resources: Map<number, string>, options: StoreOptions = {}): Promise<void> {
         // TODO: Inject settings manager and global scope identifier?
-        const settings = HakuNeko.SettingsManager.OpenScope(Scope);
-        const directory = options.directory ? undefined : settings.Get<Directory>(Key.MediaDirectory);
+        const native = options.archiveTarget;
+        const settings = native ? undefined : HakuNeko.SettingsManager.OpenScope(Scope);
+        const directory = native || options.directory ? undefined : settings.Get<Directory>(Key.MediaDirectory);
         // Snapshot scalar settings before any asynchronous permission or filesystem operation.
-        const format = options.format ?? settings.Get<Choice>(Key.MangaExportFormat).Value;
-        const websiteSubDirectory = options.useWebsiteSubDirectory ?? settings.Get<Check>(Key.UseWebsiteSubDirectory).Value;
-        let output = options.directory ?? directory.Value;
+        const format = options.format ?? native?.format ?? settings.Get<Choice>(Key.MangaExportFormat).Value;
+        const websiteSubDirectory = options.useWebsiteSubDirectory ?? native?.useWebsiteSubDirectory ?? settings.Get<Check>(Key.UseWebsiteSubDirectory).Value;
+        let output = native ? undefined : options.directory ?? directory.Value;
         const root = output;
         if (directory) await directory.EnsureAccess();
-        else if (await output.queryPermission({ mode: 'readwrite' }) !== 'granted') throw new Error('Download directory write permission is required');
+        else if (!native && await output.queryPermission({ mode: 'readwrite' }) !== 'granted') throw new Error('Download directory write permission is required');
         options.context?.signal.throwIfAborted();
         const segments: string[] = [];
         if(websiteSubDirectory && this.Parent?.Parent) {
             const website = SanitizeFileName(this.Parent?.Parent?.Title);
             segments.push(website);
-            output = await output.getDirectoryHandle(website, { create: true });
+            if (!native) output = await output.getDirectoryHandle(website, { create: true });
         }
         if(this.Parent) {
             const manga = SanitizeFileName(this.Parent?.Title);
             segments.push(manga);
-            output = await output.getDirectoryHandle(manga, { create: true });
+            if (!native) output = await output.getDirectoryHandle(manga, { create: true });
         }
 
         // TODO: Find more appropriate way to inject the storage dependency
@@ -212,16 +213,19 @@ export class Chapter extends StoreableMediaContainer<Page> {
         const context = options.context && {
             ...options.context,
             writing: (path: string) => options.context.writing([...segments, path].join('/')),
-            written: file => options.context.written({ ...file, path: [...segments, file.path].join('/') }),
+            written: file => options.context.written({ ...file, path: native ? file.path : [...segments, file.path].join('/') }),
+            write: native ? (path: string, data: Blob, signal: AbortSignal) => native.write([...segments, path].join('/'), data, signal) : undefined,
         };
-        await WithOutputLock(output, context?.signal, async () => {
-            context?.begin(format === MangaExportFormat.RAWs ? resources.size : 1, { directory: root, format });
+        const exportChapter = async () => {
+            await context?.begin(format === MangaExportFormat.RAWs ? resources.size : 1, { directory: root, rootId: native?.rootId, format });
             try {
                 await exporter.Export(resources, output, this.Title, this.Parent?.Title, context);
             } finally {
                 await context?.verify?.();
             }
-        });
+        };
+        if (native) await exportChapter();
+        else await WithOutputLock(output, context?.signal, exportChapter);
     }
 }
 

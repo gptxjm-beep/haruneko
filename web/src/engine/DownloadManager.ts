@@ -76,6 +76,7 @@ export class DownloadManager {
                 || (previous.owner ?? 'manual') !== (options.owner ?? 'manual')
                 || previous.signal !== options.signal || previous.format !== options.format
                 || previous.existingFiles !== options.existingFiles
+                || previous.archiveTarget?.identity !== options.archiveTarget?.identity
                 || previous.useWebsiteSubDirectory !== options.useWebsiteSubDirectory) continue;
             if (previous.directory === options.directory
                 || previous.directory && options.directory && await previous.directory.isSameEntry(options.directory)) return task;

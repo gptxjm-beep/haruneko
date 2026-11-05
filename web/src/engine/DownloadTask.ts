@@ -4,6 +4,7 @@ import type { StorageController } from './StorageController';
 import { type IObservable, Observable, ObservableArray } from './Observable';
 import type { DownloadOptions, DownloadHandle, DownloadResult, DownloadError, DownloadStage, ExportContext, WrittenFile, ExportProgress, CleanupRetryResult } from './DownloadContract';
 import { ImageValidationError, IsValidatedImage } from './ValidateImage';
+import { ArchivePersistenceError } from './DownloadContract';
 
 export const enum Status {
     Paused = 'paused',
@@ -38,13 +39,14 @@ export class DownloadTask {
     private expectedFiles: number = null;
     private attemptedPaths: string[] = [];
     private files: WrittenFile[] = [];
-    private outputTarget: { directory?: FileSystemDirectoryHandle; format?: string } = {};
+    private outputTarget: { directory?: FileSystemDirectoryHandle; rootId?: string; format?: string } = {};
     private exportProgress = new Observable<ExportProgress, DownloadTask>({ state: 'not-started', expectedFiles: null, writtenFiles: 0 }, this);
     private liveErrors = new Observable<readonly DownloadError[], DownloadTask>([], this);
     private exportInvoked = false;
     private exportSucceeded = false;
     private verification: DownloadResult['verification']['state'] = 'not-performed';
     private verificationStarted = false;
+    private verificationMethod: 'file-size' | 'sha256' = 'file-size';
     private cleanupState: DownloadResult['cleanup']['state'] = 'not-needed';
     private remainingKeys: string[] = [];
     private DetachObservables: () => void = () => {};
@@ -130,9 +132,12 @@ export class DownloadTask {
         if (this.verificationStarted || !this.files.length) return;
         this.verificationStarted = true;
         this.verification = 'passed';
+        this.verificationMethod = this.Options.archiveTarget ? 'sha256' : 'file-size';
         for (const file of this.files) {
             try {
-                if ((await file.handle.getFile()).size !== file.size) throw new Error(`Exported file size mismatch: ${file.path}`);
+                if (this.Options.archiveTarget) {
+                    if (file.rootId !== this.Options.archiveTarget.rootId || !file.fileId || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '')) throw new Error('Native archive receipt is missing its verified fingerprint');
+                } else if (!file.handle || (await file.handle.getFile()).size !== file.size) throw new Error(`Exported file size mismatch: ${file.path}`);
             } catch(error) {
                 this.verification = 'failed';
                 this.Record('verification', error);
@@ -161,7 +166,7 @@ export class DownloadTask {
                 validatedPages: this.validatedPages, method: 'browser-image-decoder',
             }),
             output: Object.freeze({ state: outputState, ...this.outputTarget, expectedFiles: this.expectedFiles, attemptedPaths: Object.freeze([...this.attemptedPaths]), files: Object.freeze([...this.files]) }),
-            verification: Object.freeze({ state: this.verification, method: 'file-size' }),
+            verification: Object.freeze({ state: this.verification, method: this.verificationMethod }),
             cleanup: Object.freeze({ state: this.cleanupState, remainingKeys: Object.freeze([...this.remainingKeys]) }),
             errors: Object.freeze(this.stageErrors.map(error => Object.freeze({ ...error }))),
         });
@@ -196,6 +201,7 @@ export class DownloadTask {
         this.exportInvoked = this.exportSucceeded = false;
         this.verification = 'not-performed';
         this.verificationStarted = false;
+        this.verificationMethod = 'file-size';
         this.cleanupState = 'not-needed';
         this.remainingKeys = [];
         this.completion = new Promise(resolve => { this.resolveCompletion = resolve; });
@@ -252,12 +258,18 @@ export class DownloadTask {
             const cancellator = this.cancellation;
             this.Abort = () => this.Cancel();
             cancellator.signal.throwIfAborted();
+            stage = 'repository';
+            if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('prepare', 0, 0);
+            stage = 'prepare';
             await this.Media.Update();
             cancellator.signal.throwIfAborted();
             stage = 'fetch';
             this.fetchState = 'running';
             this.AssertMediaEntries();
             this.expectedPages = this.Media.Entries.Value.length;
+            stage = 'repository';
+            if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('fetch', 0, 0);
+            stage = 'fetch';
             const promises = this.Media.Entries.Value.map(async (item, index: number) => {
                 let itemStage: DownloadStage = 'fetch';
                 try {
@@ -270,9 +282,11 @@ export class DownloadTask {
                     const resource = await this.storageController.SaveTemporary(data);
                     resourcemap.set(index, resource);
                     this.UpdateProgress(resourcemap.size);
+                    itemStage = 'repository';
+                    if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('fetch', this.receivedPages, this.validatedPages);
                 } catch(error) {
                     if (error instanceof ImageValidationError) this.validationFailed = true;
-                    this.Record(error instanceof ImageValidationError ? 'validation' : itemStage, error);
+                    this.Record(error instanceof ImageValidationError ? 'validation' : error instanceof ArchivePersistenceError ? 'repository' : itemStage, error);
                     // TODO: Abort all other pending downloads or keep running?
                     throw error;
                 }
@@ -290,10 +304,11 @@ export class DownloadTask {
                 const context: ExportContext = {
                     signal: cancellator.signal,
                     existingFiles: this.Options.existingFiles ?? ((this.Options.owner ?? 'manual') === 'manual' ? 'replace' : 'preserve'),
-                    begin: (count, target) => {
+                    begin: async (count, target) => {
                         this.expectedFiles = count;
                         this.outputTarget = { ...target };
                         this.exportProgress.Value = Object.freeze({ state: 'preparing', expectedFiles: count, writtenFiles: this.files.length });
+                        if (this.Options.archiveTarget) await this.Options.archiveTarget.beginExport(count, target?.format ?? this.Options.archiveTarget.format);
                     },
                     writing: path => {
                         this.attemptedPaths.push(path);
@@ -310,7 +325,7 @@ export class DownloadTask {
             }
         } catch(error) {
             if (this.fetchState === 'running') this.fetchState = this.cancellation.signal.aborted ? 'cancelled' : 'failed';
-            this.Record(stage, error);
+            this.Record(error instanceof ArchivePersistenceError ? 'repository' : stage, error);
         } finally {
             await this.VerifyOutput();
             try {

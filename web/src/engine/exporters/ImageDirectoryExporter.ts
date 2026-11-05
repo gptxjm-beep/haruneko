@@ -11,7 +11,7 @@ export class ImageDirectoryExporter extends MangaExporter {
         const digits = sourceFileList.size.toString().length;
         context?.signal.throwIfAborted();
         const chapterName = SanitizeFileName(chapterTitle);
-        const directory = await targetDirectory.getDirectoryHandle(chapterName, { create: true });
+        const directory = context?.write ? targetDirectory : await targetDirectory.getDirectoryHandle(chapterName, { create: true });
 
         // TODO: delete all existing entries?
         const promises = [...sourceFileList].map(([ index, tempfile ]) => taskPool.Add(async () => {

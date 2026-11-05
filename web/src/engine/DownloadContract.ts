@@ -11,9 +11,22 @@ export interface DownloadOptions {
     /** Manual history is retained; owned automation is released by default. */
     readonly retention?: 'keep' | 'release';
     readonly existingFiles?: 'replace' | 'preserve';
+    readonly archiveTarget?: NativeArchiveTarget;
 }
 
-export type DownloadStage = 'prepare' | 'fetch' | 'validation' | 'temporary-storage' | 'export' | 'verification' | 'cleanup' | 'internal';
+export class ArchivePersistenceError extends Error {}
+
+export interface NativeArchiveTarget {
+    readonly identity: string;
+    readonly rootId: string;
+    readonly format: string;
+    readonly useWebsiteSubDirectory: boolean;
+    checkpoint(stage: DownloadStage, receivedPages: number, validatedPages: number): Promise<void>;
+    beginExport(expectedFiles: number, format: string): Promise<void>;
+    write(path: string, data: Blob, signal: AbortSignal): Promise<WrittenFile>;
+}
+
+export type DownloadStage = 'prepare' | 'fetch' | 'validation' | 'temporary-storage' | 'export' | 'verification' | 'cleanup' | 'internal' | 'repository';
 
 export interface DownloadError {
     readonly stage: DownloadStage;
@@ -23,13 +36,17 @@ export interface DownloadError {
 export interface WrittenFile {
     readonly path: string;
     readonly size: number;
-    readonly handle: FileSystemFileHandle;
+    readonly handle?: FileSystemFileHandle;
+    readonly fileId?: string;
+    readonly rootId?: string;
+    readonly sha256?: string;
 }
 
 export interface ExportContext {
     readonly signal: AbortSignal;
     readonly existingFiles?: 'replace' | 'preserve';
-    begin(expectedFiles: number, target?: { directory: FileSystemDirectoryHandle; format: string }): void;
+    begin(expectedFiles: number, target?: { directory?: FileSystemDirectoryHandle; rootId?: string; format: string }): void | Promise<void>;
+    write?(path: string, data: Blob, signal: AbortSignal): Promise<WrittenFile>;
     writing(path: string): void;
     written(file: WrittenFile): void;
     /** Verify acknowledged files before the output directory lock is released. */
@@ -65,10 +82,11 @@ export interface DownloadResult {
         readonly files: readonly WrittenFile[];
         readonly directory?: FileSystemDirectoryHandle;
         readonly format?: string;
+        readonly rootId?: string;
     };
     readonly verification: {
         readonly state: 'not-performed' | 'passed' | 'failed';
-        readonly method: 'file-size';
+        readonly method: 'file-size' | 'sha256';
     };
     readonly cleanup: {
         readonly state: 'not-needed' | 'completed' | 'failed';
