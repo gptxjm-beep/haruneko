@@ -1,3 +1,4 @@
+import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 export const ArchiveChannel = 'ArchiveRepository::Request';
 export type ArchiveReply = { ok: true; value: unknown } | { ok: false; error: { kind: 'repository' | 'filesystem' | 'validation'; message: string } };
 
@@ -37,7 +38,7 @@ export interface ArchiveAttemptResult {
     errors: { stage: string; message: string }[];
 }
 
-export type ArchiveCommand =
+export type ArchiveCommand = ArchiveCoordinatorCommand
     | { operation: 'choose-root' }
     | { operation: 'create-session'; rootId: string; siteId: string; siteName: string; settings: { format: string; useWebsiteSubDirectory: boolean } }
     | { operation: 'list-sessions' }

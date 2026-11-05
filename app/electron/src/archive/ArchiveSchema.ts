@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 2;
+export const ArchiveSchemaVersion = 3;
 
 const migrations = [
     `
@@ -40,6 +40,25 @@ const migrations = [
        receipt_sha256=(SELECT sha256 FROM files WHERE files.id=attempt_files.file_id);
      CREATE INDEX interrupted_attempts ON attempts(state,session_id);
      CREATE INDEX chapter_files ON files(root_id,chapter_key);`,
+    `CREATE TABLE archive_runs(session_id TEXT PRIMARY KEY REFERENCES sessions(id),state TEXT NOT NULL,policy TEXT NOT NULL,
+      epoch INTEGER NOT NULL DEFAULT 0,catalog_done INTEGER NOT NULL DEFAULT 0,catalog_pages INTEGER NOT NULL DEFAULT 0,catalog_attempts INTEGER NOT NULL DEFAULT 0,
+      index_state TEXT NOT NULL DEFAULT 'unknown',index_evidence TEXT NOT NULL DEFAULT '',mangas_used INTEGER NOT NULL DEFAULT 0,
+      chapters_started INTEGER NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '');
+     CREATE TABLE archive_mangas(session_id TEXT NOT NULL REFERENCES sessions(id),id TEXT NOT NULL,title TEXT NOT NULL,
+      position INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',admitted INTEGER NOT NULL DEFAULT 0,listed INTEGER NOT NULL DEFAULT 0,
+      listings INTEGER NOT NULL DEFAULT 0,next_retry INTEGER NOT NULL DEFAULT 0,retryable INTEGER NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL DEFAULT '',evidence_state TEXT NOT NULL DEFAULT 'unknown',evidence TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY(session_id,id));
+     CREATE TABLE archive_work(session_id TEXT NOT NULL,manga_id TEXT NOT NULL,id TEXT NOT NULL,chapter_key TEXT NOT NULL REFERENCES chapters(key),
+      title TEXT NOT NULL,position INTEGER NOT NULL,language TEXT,expected_pages INTEGER,expected_trusted INTEGER NOT NULL DEFAULT 0,
+      pages_evidence TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,
+      checked_epoch INTEGER NOT NULL DEFAULT 0,next_retry INTEGER NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY(session_id,manga_id,id),FOREIGN KEY(session_id,manga_id) REFERENCES archive_mangas(session_id,id));
+     CREATE TABLE archive_events(id INTEGER PRIMARY KEY,session_id TEXT NOT NULL REFERENCES sessions(id),manga_id TEXT,chapter_id TEXT,
+      kind TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL);
+     CREATE INDEX archive_work_queue ON archive_work(session_id,manga_id,checked_epoch,position);
+     CREATE INDEX archive_manga_queue ON archive_mangas(session_id,state,next_retry);
+     CREATE INDEX archive_event_session ON archive_events(session_id,id);`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

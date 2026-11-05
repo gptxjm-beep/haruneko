@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { MigrateArchiveDatabase } from './ArchiveSchema';
+import { ArchiveWorkRepository } from './ArchiveWorkRepository';
 import { Count, Text, PathKey, RelativePath, IsWithin, SafeMessage, ErrorCode } from './ArchivePaths';
 import type { ArchiveAttemptResult, ChapterRegistration } from './ArchiveProtocol';
 
@@ -16,6 +17,7 @@ export class ArchiveRepository {
     private readonly lockToken = randomUUID();
     public readonly StagingDirectory: string;
     private closed = false;
+    public readonly Work: ArchiveWorkRepository;
 
     constructor(private readonly filename: string) {
         fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -28,10 +30,12 @@ export class ArchiveRepository {
             this.database = new DatabaseSync(filename);
             this.database.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA locking_mode=EXCLUSIVE;');
             MigrateArchiveDatabase(this.database);
+            this.Work = new ArchiveWorkRepository(this.database);
             this.Transaction(() => {
                 this.database.prepare("UPDATE sessions SET state='interrupted', updated_at=? WHERE state='active'").run(Date.now());
                 this.database.prepare("UPDATE attempts SET state='interrupted', updated_at=? WHERE state='running'").run(Date.now());
                 this.database.prepare("UPDATE session_chapters SET state='Interrupted' WHERE state IN ('Downloading','Verifying')").run();
+                this.database.prepare("UPDATE archive_runs SET state='interrupted',reason='Application stopped without ending the run' WHERE state='running'").run();
             });
         } catch(error) {
             this.database?.close();

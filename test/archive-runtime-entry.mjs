@@ -47,7 +47,17 @@ if (process.argv[2] === 'crash-child') {
     const [filename, session, chapter, phase] = process.argv.slice(3);
     const repository = new ArchiveRepository(filename);
     const files = new ArchiveFiles(repository);
-    if (phase === 'transaction') {
+    if (phase === 'coordinator') {
+        const policy = { maxMangas: 1, maxChapters: 2, delayMs: 100, retryDelayMs: 1000, maxAttempts: 2, languages: [], unknownLanguage: 'include' };
+        const command = input => repository.Work.Execute({ sessionId: session, ...input });
+        command({ operation: 'archive-run-open', policy });
+        command({ operation: 'archive-catalog-page', items: [{ id: 'manga', title: 'Manga' }] });
+        command({ operation: 'archive-catalog-end', index: { state: 'unknown', evidence: 'Crash fixture' } });
+        command({ operation: 'archive-manga-begin', mangaId: 'manga' });
+        command({ operation: 'archive-manga-list', mangaId: 'manga', chapters: [{ id: 'chapter', title: 'Chapter', position: 0, language: null }],
+            order: 'ascending', orderEvidence: 'Crash fixture order', evidence: { state: 'unknown', evidence: '' } });
+        command({ operation: 'archive-chapter-begin', mangaId: 'manga', chapterId: 'chapter' });
+    } else if (phase === 'transaction') {
         repository.database.exec('BEGIN IMMEDIATE');
         repository.database.prepare('UPDATE sessions SET site_name=? WHERE id=?').run('Uncommitted name', session);
     } else {
@@ -275,12 +285,12 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 2);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 3);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });
 
-    for (const phase of ['transaction', 'fetch', 'writing', 'staged', 'published', 'verified']) {
+    for (const phase of ['transaction', 'fetch', 'writing', 'staged', 'published', 'verified', 'coordinator']) {
         await check(`SIGKILL recovery after ${phase}`, async () => {
             const f = await fixture();
             try {
@@ -303,6 +313,15 @@ if (process.argv[2] === 'crash-child') {
                 try {
                     assert.equal(recovered.Session(f.session).state, 'interrupted');
                     if (phase === 'transaction') assert.equal(recovered.Session(f.session).site_name, 'Fixture site');
+                    if (phase === 'coordinator') {
+                        const snapshot = recovered.Work.Snapshot(f.session);
+                        assert.equal(snapshot.state, 'interrupted');
+                        assert.equal(snapshot.chaptersStarted, 1);
+                        recovered.Work.Execute({ operation: 'archive-run-open', sessionId: f.session, policy: snapshot.policy });
+                        const next = recovered.Work.Execute({ operation: 'archive-next-chapter', sessionId: f.session, mangaId: 'manga', now: Date.now() });
+                        assert.equal(next.id, 'chapter');
+                        assert.equal(next.state, 'pending');
+                    }
                     const decision = await files.Recover(f.session, f.chapter, true);
                     if (phase === 'staged') {
                         assert.equal(decision.action, 'publish-staged');

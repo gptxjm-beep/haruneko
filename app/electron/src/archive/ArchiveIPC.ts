@@ -4,6 +4,7 @@ import { ArchiveRepository } from './ArchiveRepository';
 import { ArchiveFiles } from './ArchiveFiles';
 import { ArchiveChannel, type ArchiveCommand } from './ArchiveProtocol';
 import { SafeMessage } from './ArchivePaths';
+import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 
 export function AssertArchiveSender(event: IpcMainInvokeEvent, window: BrowserWindow, expectedOrigin: string): void {
     if (event.sender !== window.webContents || !event.senderFrame || event.senderFrame !== window.webContents.mainFrame
@@ -48,6 +49,7 @@ export class ArchiveIPC {
             this.repository = new ArchiveRepository(path.join(app.getPath('userData'), 'archive', 'state.sqlite'));
             this.files = new ArchiveFiles(this.repository);
         }
+        if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
         switch (command.operation) {
             case 'choose-root': {
                 const selection = await dialog.showOpenDialog(this.window, { properties: ['openDirectory', 'createDirectory'] });
