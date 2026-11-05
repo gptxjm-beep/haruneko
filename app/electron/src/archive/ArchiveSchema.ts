@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 3;
+export const ArchiveSchemaVersion = 4;
 
 const migrations = [
     `
@@ -59,6 +59,17 @@ const migrations = [
      CREATE INDEX archive_work_queue ON archive_work(session_id,manga_id,checked_epoch,position);
      CREATE INDEX archive_manga_queue ON archive_mangas(session_id,state,next_retry);
      CREATE INDEX archive_event_session ON archive_events(session_id,id);`,
+    `ALTER TABLE archive_runs ADD COLUMN catalog_active INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE archive_runs ADD COLUMN catalog_state TEXT NOT NULL DEFAULT 'idle';
+     UPDATE archive_runs SET catalog_state=CASE WHEN catalog_done=1 THEN 'finished' WHEN state='paused' THEN 'paused' ELSE 'interrupted' END;
+     CREATE TABLE archive_manifests(session_id TEXT NOT NULL,manga_id TEXT NOT NULL,token TEXT NOT NULL,
+      expected_count INTEGER NOT NULL,received_count INTEGER NOT NULL DEFAULT 0,ordering TEXT NOT NULL,order_evidence TEXT NOT NULL,
+      evidence TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'registering',PRIMARY KEY(session_id,manga_id),
+      FOREIGN KEY(session_id,manga_id) REFERENCES archive_mangas(session_id,id));
+     CREATE TABLE archive_manifest_entries(session_id TEXT NOT NULL,manga_id TEXT NOT NULL,id TEXT NOT NULL,
+      position INTEGER NOT NULL,payload TEXT NOT NULL,conflict INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,manga_id,id),
+      FOREIGN KEY(session_id,manga_id) REFERENCES archive_manifests(session_id,manga_id));
+     CREATE INDEX archive_manifest_order ON archive_manifest_entries(session_id,manga_id,position,id);`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

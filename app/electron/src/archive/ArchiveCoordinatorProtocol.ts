@@ -1,5 +1,5 @@
 /** Development-only bounds, enforced again in the main process. No unlimited mode. */
-export const ArchiveDevelopmentLimits = Object.freeze({ mangas: 5, chapters: 20, catalogPages: 20, pageItems: 100, chaptersPerManga: 200 });
+export const ArchiveDevelopmentLimits = Object.freeze({ mangas: 5, chapters: 20, catalogPages: 20, pageItems: 100, chapterBatchSize: 200 });
 export interface ArchivePolicy {
     maxMangas: number;
     maxChapters: number;
@@ -22,17 +22,23 @@ export interface ArchiveRunSnapshot {
     sessionId: string; state: ArchiveRunState; policy: ArchivePolicy; catalogDone: boolean; catalogPages: number;
     index: ArchiveEvidence; mangasUsed: number; chaptersStarted: number; reason: string; catalogAttempts: number;
     counts: Record<string, number>; nextRetry: number | null;
+    catalogState: 'idle' | 'fetching' | 'paused' | 'interrupted' | 'cancelled' | 'failed' | 'finished';
 }
 export type ArchiveCoordinatorCommand =
     | { operation: 'archive-run-open'; sessionId: string; policy: ArchivePolicy }
     | { operation: 'archive-run-state'; sessionId: string; state: ArchiveRunState; reason: string }
     | { operation: 'archive-run-snapshot'; sessionId: string }
     | { operation: 'archive-catalog-begin'; sessionId: string }
+    | { operation: 'archive-catalog-interrupt'; sessionId: string; reason: 'paused' | 'cancelled' }
+    | { operation: 'archive-catalog-failed'; sessionId: string; reason: string }
     | { operation: 'archive-catalog-page'; sessionId: string; items: ArchiveMangaRecord[] }
     | { operation: 'archive-catalog-end'; sessionId: string; index: ArchiveEvidence }
     | { operation: 'archive-next-manga'; sessionId: string; now: number }
     | { operation: 'archive-manga-begin'; sessionId: string; mangaId: string }
     | { operation: 'archive-manga-list'; sessionId: string; mangaId: string; chapters: ArchiveWorkChapter[]; order: 'ascending' | 'descending' | 'unknown'; evidence: ArchiveEvidence; orderEvidence: string }
+    | { operation: 'archive-manifest-begin'; sessionId: string; mangaId: string; count: number; order: 'ascending' | 'unknown'; evidence: ArchiveEvidence; orderEvidence: string }
+    | { operation: 'archive-manifest-batch'; sessionId: string; mangaId: string; manifestId: string; offset: number; chapters: ArchiveWorkChapter[] }
+    | { operation: 'archive-manifest-end'; sessionId: string; mangaId: string; manifestId: string }
     | { operation: 'archive-manga-defer'; sessionId: string; mangaId: string; reason: string; retryable: boolean }
     | { operation: 'archive-next-chapter'; sessionId: string; mangaId: string; now: number }
     | { operation: 'archive-chapter-begin'; sessionId: string; mangaId: string; chapterId: string }

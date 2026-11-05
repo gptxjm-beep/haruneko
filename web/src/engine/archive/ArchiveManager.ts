@@ -133,15 +133,20 @@ export class ArchiveManager {
                 } finally { await pages.return?.(); }
                 if (this.requested) return;
                 if (!items && coverage.state !== 'unsupported' && (await this.Refresh()).catalogAttempts < this.policy.maxAttempts) {
+                    await this.Command({ operation: 'archive-catalog-failed', sessionId: this.SessionId, reason: 'Empty catalog; bounded delayed recheck' });
                     await this.Command({ operation: 'archive-note', sessionId: this.SessionId, kind: 'catalog-retry', reason: 'Empty catalog; bounded delayed recheck' });
                     await this.Wait(this.policy.retryDelayMs); continue;
                 }
+                if (!items && coverage.state === 'complete') coverage = { state: 'unknown', evidence: 'Empty enumeration is not proof of a complete index' };
                 if (!terminal && coverage.state === 'complete') coverage = { state: 'unknown', evidence: 'Index enumeration ended without terminal evidence' };
                 await this.Command({ operation: 'archive-catalog-end', sessionId: this.SessionId, index: coverage });
                 return;
             } catch(error) {
-                if (error instanceof ArchivePersistenceError || this.requested) throw error;
+                if (error instanceof ArchivePersistenceError) throw error;
+                if (this.requested === 'cancelled' && (error === this.cancellation.signal.reason || error instanceof DOMException && error.name === 'AbortError')) return;
                 const failure = ClassifyArchiveError(error);
+                await this.Command({ operation: 'archive-catalog-failed', sessionId: this.SessionId, reason: failure.reason });
+                if (this.requested) return;
                 if (!items && failure.retryable && (await this.Refresh()).catalogAttempts < this.policy.maxAttempts) {
                     await this.Command({ operation: 'archive-note', sessionId: this.SessionId, kind: 'catalog-retry', reason: failure.reason });
                     await this.Wait(this.policy.retryDelayMs); continue;
@@ -149,6 +154,8 @@ export class ArchiveManager {
                 await this.Command({ operation: 'archive-catalog-end', sessionId: this.SessionId,
                     index: { state: failure.reason.startsWith('unsupported') ? 'unsupported' : items ? 'partial' : 'unknown', evidence: failure.reason } });
                 return;
+            } finally {
+                if (this.requested) await this.Command({ operation: 'archive-catalog-interrupt', sessionId: this.SessionId, reason: this.requested });
             }
         }
     }
@@ -163,11 +170,20 @@ export class ArchiveManager {
                 await this.Command({ operation: 'archive-manga-defer', sessionId: this.SessionId, mangaId: manga.Identifier, reason: 'empty-chapter-list: temporary emptiness is not completion', retryable: true });
                 return false;
             }
-            const chapters = [...manifest.chapters];
-            if (manifest.order === 'descending') chapters.reverse();
-            await this.Command({ operation: 'archive-manga-list', sessionId: this.SessionId, mangaId: manga.Identifier,
-                chapters: chapters.map((chapter, position) => ({ ...chapter, position })), order: manifest.order === 'unknown' ? 'unknown' : 'ascending',
+            const manifestId = await this.Command<string>({ operation: 'archive-manifest-begin', sessionId: this.SessionId, mangaId: manga.Identifier, count: manifest.chapters.length,
+                order: manifest.order === 'unknown' ? 'unknown' : 'ascending',
                 orderEvidence: `Original ${manifest.order}; normalized oldest-first once. ${manifest.orderEvidence}`, evidence: manifest.coverage });
+            for (let offset = 0; offset < manifest.chapters.length; offset += Limits.chapterBatchSize) {
+                if (this.cancellation.signal.aborted) return false;
+                const chapters: (typeof manifest.chapters)[number][] = [];
+                for (let position = offset; position < Math.min(offset + Limits.chapterBatchSize, manifest.chapters.length); position++) {
+                    const index = manifest.order === 'descending' ? manifest.chapters.length - 1 - position : position;
+                    chapters.push({ ...manifest.chapters[index], position });
+                }
+                await this.Command({ operation: 'archive-manifest-batch', sessionId: this.SessionId, mangaId: manga.Identifier, manifestId, offset, chapters });
+            }
+            if (this.cancellation.signal.aborted) return false;
+            await this.Command({ operation: 'archive-manifest-end', sessionId: this.SessionId, mangaId: manga.Identifier, manifestId });
             return true;
         } catch(error) {
             if (error instanceof ArchivePersistenceError || this.requested) throw error;

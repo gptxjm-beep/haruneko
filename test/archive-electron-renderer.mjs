@@ -100,6 +100,18 @@
     record('Coordinator resumes through SQLite and original DownloadManager without re-fetching healthy files', resumedState.counts.healthy === 4 && visited.length === 4);
     record('Coordinator processes each native manga oldest-first, including read-marked chapters', visited.join(',') === 'manager-a/old,manager-a/new,manager-b/old,manager-b/new');
     record('Native connector chapter-list uncertainty remains reviewable', resumedState.state === 'review');
+    scraper.FetchChapters = async manga => Array.from({ length: 364 }, (_, index) => new Chapter(scraper, manga, `c${363 - index}`, `Chapter ${363 - index}`));
+    const longSession = await client.Request({ operation: 'create-session', rootId: grant.rootId, siteId: 'site', siteName: 'Site', settings });
+    const longSource = { site: plugin,
+        Catalog: async function* () { yield { items: [{ id: 'long-manager', title: 'Long Manager' }], terminal: true,
+            coverage: { state: 'unknown', evidence: 'Isolated long-manga fixture' } }; },
+        Chapters: (manga, signal) => nativeSource.Chapters(manga, signal),
+    };
+    const beforeLong = visited.length;
+    const longManager = new ArchiveManager(plugin, manager, client, longSession, { ...policy, maxMangas: 1, maxChapters: 20 }, { source: longSource });
+    const longState = await longManager.Start();
+    record('Native IPC registers all 364 chapters but exports only twenty', longState.state === 'limited' && longState.counts.healthy === 20 && longState.counts.pending === 344);
+    record('Long native manga retains oldest-first order across SQLite batches', visited.slice(beforeLong).join(',') === Array.from({ length: 20 }, (_, index) => `long-manager/c${index}`).join(','));
     for (let retry = 0; manager.Queue.Value.length && retry < 50; retry++) await new Promise(resolve => setTimeout(resolve, 10));
     record('Completed archive tasks do not remain in manager history', manager.Queue.Value.length === 0);
     return checks;

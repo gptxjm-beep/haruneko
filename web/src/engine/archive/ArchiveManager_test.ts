@@ -93,6 +93,80 @@ async function fixture(catalog = [{ id: 'manga', title: 'Manga' }]) {
 }
 
 describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
+    it('Should register 364 chapters in bounded batches and download only the oldest twenty', async () => {
+        const f = await fixture();
+        f.manifests.get('manga')!.chapters = Array.from({ length: 364 }, (_, index) => ({ id: `c${363 - index}`, title: `Chapter ${363 - index}`, position: index, language: 'ar' }));
+        const result = await f.manager().Start();
+        expect(result.state).toBe('limited');
+        expect(result.counts.healthy).toBe(20);
+        expect(result.counts.pending).toBe(344);
+        expect(f.calls).toEqual(Array.from({ length: 20 }, (_, index) => `manga/c${index}`));
+    }, 15_000);
+
+    it('Should resume a 364-chapter registration interrupted between batches without publishing a partial list', async () => {
+        const f = await fixture();
+        const chapters = Array.from({ length: 364 }, (_, position) => ({ id: `c${position}`, title: `C${position}`, position, language: 'ar' }));
+        const command = (input: Record<string, unknown>) => f.Repository.Work.Execute({ sessionId: f.session, ...input } as ArchiveCoordinatorCommand);
+        command({ operation: 'archive-run-open', policy: f.policy });
+        command({ operation: 'archive-catalog-page', items: [{ id: 'manga', title: 'Manga' }] });
+        command({ operation: 'archive-catalog-end', index: complete });
+        command({ operation: 'archive-manga-begin', mangaId: 'manga' });
+        const token = command({ operation: 'archive-manifest-begin', mangaId: 'manga', count: 364, order: 'ascending', orderEvidence: 'Fixture', evidence: complete });
+        command({ operation: 'archive-manifest-batch', mangaId: 'manga', manifestId: token, offset: 0, chapters: chapters.slice(0, 200) });
+        expect(command({ operation: 'archive-next-chapter', mangaId: 'manga', now: Date.now() })).toBeNull();
+        expect(f.Repository.Work.Snapshot(f.session).counts.pending).toBeUndefined();
+        await f.reopen();
+        f.manifests.get('manga')!.chapters = chapters;
+        f.manifests.get('manga')!.order = 'ascending';
+        const result = await f.manager().Resume();
+        expect(result.state).toBe('limited');
+        expect(result.counts.healthy).toBe(20);
+        expect(result.counts.pending).toBe(344);
+        expect(f.calls).toEqual(Array.from({ length: 20 }, (_, index) => `manga/c${index}`));
+    }, 15_000);
+
+    it('Should pause catalog discovery repeatedly without spending connector failure attempts', async () => {
+        const f = await fixture();
+        const manager = f.manager();
+        let interruptions = 0;
+        f.source.Catalog = async function* () {
+            if (interruptions++ < 4) void manager.Pause();
+            yield { items: [{ id: 'manga', title: 'Manga' }], terminal: true, coverage: complete };
+        };
+        for (let index = 0; index < 4; index++) {
+            const result = await manager.Start();
+            expect(result.state).toBe('paused');
+            expect(result.catalogDone).toBe(false);
+            expect(result.catalogAttempts).toBe(0);
+            expect(result.catalogState).toBe('paused');
+            expect(result.index.state).toBe('partial');
+            await f.reopen();
+        }
+        expect((await manager.Resume()).state).toBe('drained');
+        expect(f.calls).toEqual(['manga/old', 'manga/new']);
+    });
+
+    it('Should retain genuine catalog failures even when the caller also pauses', async () => {
+        const f = await fixture();
+        const manager = f.manager();
+        f.source.Catalog = async function* () { void manager.Pause(); throw new Error('Real connector network failure'); };
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            const snapshot = await manager.Start();
+            expect(snapshot.state).toBe('paused');
+            expect(snapshot.catalogAttempts).toBe(attempt);
+            expect(snapshot.catalogState).toBe('failed');
+        }
+        expect((await manager.Resume()).state).toBe('review');
+        expect(f.calls).toEqual([]);
+    });
+
+    it('Should not prove index completeness merely because the generator ended', async () => {
+        const f = await fixture();
+        f.source.Catalog = async function* () { yield { items: [{ id: 'manga', title: 'Manga' }], terminal: false, coverage: complete }; };
+        const result = await f.manager().Start();
+        expect(result.index.state).toBe('unknown');
+        expect(result.state).toBe('review');
+    });
     it('Should process multiple mangas oldest-first without consulting read state', async () => {
         const f = await fixture([{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }]);
         const result = await f.manager().Start();

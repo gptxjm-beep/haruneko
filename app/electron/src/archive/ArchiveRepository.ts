@@ -32,6 +32,7 @@ export class ArchiveRepository {
             MigrateArchiveDatabase(this.database);
             this.Work = new ArchiveWorkRepository(this.database);
             this.Transaction(() => {
+                this.Work.RecoverInterruptedCatalogs();
                 this.database.prepare("UPDATE sessions SET state='interrupted', updated_at=? WHERE state='active'").run(Date.now());
                 this.database.prepare("UPDATE attempts SET state='interrupted', updated_at=? WHERE state='running'").run(Date.now());
                 this.database.prepare("UPDATE session_chapters SET state='Interrupted' WHERE state IN ('Downloading','Verifying')").run();
