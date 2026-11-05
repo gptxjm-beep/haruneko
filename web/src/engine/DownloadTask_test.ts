@@ -3,6 +3,7 @@ import { DownloadTask, Status } from './DownloadTask';
 import type { StoreableMediaContainer, MediaItem } from './providers/MediaPlugin';
 import type { StorageController } from './StorageController';
 import { DeferredTask } from './taskpool/DeferredTask';
+import { Page, type MangaScraper } from './providers/MangaPlugin';
 
 function MockItem(resolve: boolean, delay: number = undefined) {
     const item = { Fetch: vi.fn() };
@@ -25,7 +26,7 @@ function MockItem(resolve: boolean, delay: number = undefined) {
 class TestFixture {
 
     public readonly MediaContainerMock = { Update: vi.fn(), Store: vi.fn() };
-    public readonly StorageControllerMock = { SaveTemporary: vi.fn(), RemoveTemporary: vi.fn() };
+    public readonly StorageControllerMock = { SaveTemporary: vi.fn().mockResolvedValue('task-temp'), RemoveTemporary: vi.fn() };
     public readonly StatusChangedCallbackMock = vi.fn();
     public readonly ProgressChangedCallbackMock = vi.fn();
 
@@ -63,6 +64,71 @@ describe('DownloadTask', () => {
     });
 
     describe('Run', () => {
+
+        it('Should reject HTML returned as a manga page before storing the chapter', async () => {
+            const scraper = { FetchImage: vi.fn().mockResolvedValue(new Blob(['<html>Error</html>'], { type: 'text/html' })) };
+            const page = new Page(scraper as unknown as MangaScraper, null, new URL('https://example.com/page'));
+            const fixture = new TestFixture().SetupMediaContainer([page]);
+            const testee = fixture.CreateTestee();
+
+            await testee.Run();
+
+            expect(testee.Status.Value).toBe(Status.Failed);
+            expect(testee.Errors.Value).toHaveLength(1);
+            expect(fixture.StorageControllerMock.SaveTemporary).not.toHaveBeenCalled();
+            expect(fixture.StorageControllerMock.RemoveTemporary).not.toHaveBeenCalled();
+            expect(fixture.MediaContainerMock.Store).not.toHaveBeenCalled();
+        });
+
+        it('Should finalize and reset abort when temporary cleanup fails after export', async () => {
+            const fixture = new TestFixture().SetupMediaContainer([MockItem(true)]);
+            const cleanupError = new Error('Temporary cleanup failed');
+            fixture.StorageControllerMock.RemoveTemporary.mockRejectedValue(cleanupError);
+            const testee = fixture.CreateTestee();
+            const promise = testee.Run();
+            const abort = testee.Abort;
+
+            await expect(promise).resolves.toBeUndefined();
+
+            expect(fixture.MediaContainerMock.Store).toHaveBeenCalledTimes(1);
+            expect(testee.Status.Value).toBe(Status.Failed);
+            expect(testee.Errors.Value).toEqual([cleanupError]);
+            expect(testee.Abort).not.toBe(abort);
+            expect(fixture.StorageControllerMock.RemoveTemporary).toHaveBeenCalledWith('task-temp');
+        });
+
+        it('Should preserve the original failure when temporary cleanup also fails', async () => {
+            const downloadError = new Error('Download failed');
+            const cleanupError = new Error('Temporary cleanup failed');
+            const item = { Fetch: vi.fn().mockRejectedValue(downloadError) } as unknown as MediaItem;
+            const fixture = new TestFixture().SetupMediaContainer([MockItem(true), item]);
+            fixture.StorageControllerMock.RemoveTemporary.mockRejectedValue(cleanupError);
+            const testee = fixture.CreateTestee();
+
+            await expect(testee.Run()).resolves.toBeUndefined();
+
+            expect(testee.Status.Value).toBe(Status.Failed);
+            expect(testee.Errors.Value).toEqual([downloadError, cleanupError]);
+            expect(fixture.MediaContainerMock.Store).not.toHaveBeenCalled();
+        });
+
+        it('Should keep export and cleanup errors and allow another run', async () => {
+            const fixture = new TestFixture().SetupMediaContainer([MockItem(true)]);
+            const exportError = new Error('Export failed');
+            const cleanupError = new Error('Cleanup failed');
+            fixture.MediaContainerMock.Store.mockRejectedValueOnce(exportError);
+            fixture.StorageControllerMock.RemoveTemporary.mockRejectedValueOnce(cleanupError);
+            const testee = fixture.CreateTestee();
+
+            await testee.Run();
+            expect(testee.Errors.Value).toEqual([exportError, cleanupError]);
+            expect(testee.Status.Value).toBe(Status.Failed);
+
+            await testee.Run();
+            expect(fixture.MediaContainerMock.Store).toHaveBeenCalledTimes(2);
+            expect(testee.Status.Value).toBe(Status.Completed);
+            expect(testee.Errors.Value).toEqual([]);
+        });
 
         it('Should process all entries in container on success', async () => {
             const items = [ MockItem(true), MockItem(true), MockItem(true), MockItem(true) ];
@@ -249,7 +315,7 @@ describe('DownloadTask', () => {
 
         it('Should set expected values on downloading error', async () => {
             const item = MockItem(false, 5);
-            const fixture = new TestFixture().SetupMediaContainer([ item ]);
+            const fixture = new TestFixture().SetupMediaContainer([ MockItem(true), item ]);
             const cleaned = new DeferredTask(() => Promise.resolve(), undefined);
             fixture.StorageControllerMock.RemoveTemporary.mockImplementationOnce(() => cleaned.Run());
             const testee = fixture.CreateTestee();

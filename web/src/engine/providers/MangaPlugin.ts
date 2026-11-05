@@ -8,6 +8,7 @@ import { NotImplementedError } from '../Error';
 import { CreateChapterExportRegistry } from '../exporters/MangaExporterRegistry';
 import { Observable } from '../Observable';
 import type { Tag } from '../Tags';
+import { ValidateImage } from '../ValidateImage';
 
 const settingsKeyPrefix = 'plugin.';
 
@@ -213,6 +214,6 @@ export class Page<T extends JSONObject = JSONObject> extends MediaItem {
     }
 
     public async Fetch(priority: Priority, signal: AbortSignal): Promise<Blob> {
-        return this.scraper.FetchImage(this, priority, signal);
+        return ValidateImage(await this.scraper.FetchImage(this, priority, signal));
     }
 }

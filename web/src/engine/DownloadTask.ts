@@ -86,7 +86,12 @@ export class DownloadTask {
         } catch(error) {
             this.errors.Push(error instanceof Error ? error : new Error(error.toString()));
         } finally {
-            await this.storageController.RemoveTemporary(...resourcemap.values());
+            try {
+                // An empty key list clears the whole temporary store, including other tasks.
+                if(resourcemap.size > 0) await this.storageController.RemoveTemporary(...resourcemap.values());
+            } catch(error) {
+                this.errors.Push(error instanceof Error ? error : new Error(String(error)));
+            }
             this.UpdateProgress(resourcemap.size);
             this.status.Value = this.errors.Value.length > 0 ? Status.Failed : Status.Completed;
             this.Abort = this.DisabledAbort;
