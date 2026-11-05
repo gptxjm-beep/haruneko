@@ -12,6 +12,7 @@ import { RemoteBrowserWindowController } from './ipc/RemoteBrowserWindow';
 import { RPCServer } from '../../src/rpc/Server';
 import { RemoteProcedureCallManager } from './ipc/RemoteProcedureCallManager';
 import { RemoteProcedureCallContract } from './ipc/RemoteProcedureCallContract';
+import { ArchiveIPC } from './archive/ArchiveIPC';
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
 
 type CLIOptions = {
@@ -107,6 +108,7 @@ async function OpenWindow(): Promise<void> {
         await app.whenReady();
         const win = await CreateApplicationWindow();
         const uri = new URL(argv.origin ?? manifest.url ?? 'about:blank');
+        new ArchiveIPC(win, uri.origin);
         UpdatePermissions(win.webContents.session, uri);
 
         new Logger(win.webContents);
