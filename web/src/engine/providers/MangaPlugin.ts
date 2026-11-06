@@ -112,8 +112,23 @@ export class MangaPlugin extends MediaContainer<Manga> {
 
     private async Prepare() {
         await this._settings.Initialize(...this.scraper.Settings);
-        const mangas = await this.storageController.LoadPersistent<{ id: string, title: string }[]>(Store.MediaLists, this.Identifier) || [];
-        this.entries.Value = mangas.map(manga => this.CreateEntry(manga.id, manga.title));
+        await this.RefreshMediaListCache();
+    }
+
+    private mediaListEpoch = 0;
+    private loadedMediaListEpoch = -1;
+    public InvalidateMediaListCache(): void { this.mediaListEpoch++; }
+    /** Reload only a published local catalog. Never calls a connector or discards read/favorite state. */
+    public async RefreshMediaListCache(): Promise<void> {
+        if (this.loadedMediaListEpoch === this.mediaListEpoch) return;
+        const epoch = this.mediaListEpoch;
+        const saved = await this.storageController.LoadPersistent<{ id: string; title: string }[]>(Store.MediaLists, this.Identifier) || [];
+        const entries: Manga[] = [];
+        for (let start = 0; start < saved.length; start += 500) {
+            entries.push(...saved.slice(start, start + 500).map(item => this.CreateEntry(item.id, item.title)));
+            if (start + 500 < saved.length) await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (epoch === this.mediaListEpoch) { this.entries.Value = entries; this.loadedMediaListEpoch = epoch; }
     }
 
     public override get Settings(): ISettings {

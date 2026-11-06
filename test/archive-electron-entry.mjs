@@ -51,6 +51,8 @@ try {
     console.log('Loading isolated renderer');
     await window.loadURL(url);
     assert.equal(path.resolve(window.webContents.session.getStoragePath()), path.resolve(profile), 'Browser storage must use the isolated test profile');
+    const indexMigrationChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_MIGRATION_TEST_SCRIPT, 'utf8'));
+    for (const check of indexMigrationChecks) assert.equal(check.passed, true, check.name);
     console.log('Running renderer archive checks');
     const checks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARCHIVE_TEST_SCRIPT, 'utf8'));
     for (const check of checks) assert.equal(check.passed, true, check.name);
@@ -58,6 +60,8 @@ try {
     for (const check of uiChecks) assert.equal(check.passed, true, check.name);
     const hubChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARABIC_HUB_TEST_SCRIPT, 'utf8'));
     for (const check of hubChecks) assert.equal(check.passed, true, check.name);
+    const indexChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_TEST_SCRIPT, 'utf8'));
+    for (const check of indexChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
     for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
     if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
@@ -82,6 +86,29 @@ try {
         await new SettingsManager(new StorageControllerBrowser()).OpenScope('frontend.classic').Initialize(setting);
         return setting.Value;
     })()`);
+    const indexRecovery = await window.webContents.executeJavaScript(`(async () => {
+        const { SiteIndexRepository } = await import('/src/engine/catalog/SiteIndexRepository.ts');
+        const { SiteIndexManager } = await import('/src/engine/catalog/SiteIndexManager.ts');
+        const { StorageControllerBrowser } = await import('/src/engine/StorageControllerBrowser.ts');
+        const { Store } = await import('/src/engine/StorageController.ts');
+        let callsA = 0, callsB = 0;
+        const repository = new SiteIndexRepository();
+        const manager = new SiteIndexManager(repository, () => [{ id: 'index-recovery-a', Catalog: async function* () { callsA++; } },
+            { id: 'index-recovery-b', Catalog: async function* () { callsB++; yield { items: [{ id: 'b', title: 'Manga b' }], terminal: true, coverage: { state: 'unknown', evidence: 'Post-reload fixture observations' } }; } }], navigator.locks, { timeoutMs: 10000, delayMs: 1, retryMs: 1 });
+        await manager.Initialize(); const before = manager.State.Value.job;
+        if (callsA || callsB || before.state !== 'interrupted') throw new Error('Index unexpectedly auto-started after reload');
+        await manager.Resume(); const deadline = Date.now() + 10000;
+        while (manager.Activity.Value.owned && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+        const storage = new StorageControllerBrowser();
+        return { callsA, callsB, state: manager.State.Value.job.state, attempts: manager.State.Value.job.items[1].attempts,
+            savedA: await storage.LoadPersistent(Store.MediaLists, 'index-recovery-a'), savedB: await storage.LoadPersistent(Store.MediaLists, 'index-recovery-b') };
+    })()`);
+    assert.equal(indexRecovery.callsA, 0, 'Catalog recovery must reuse prior successful sites');
+    assert.equal(indexRecovery.callsB, 1, 'Catalog recovery must restart only the interrupted site');
+    assert.equal(indexRecovery.state, 'finished');
+    assert.equal(indexRecovery.attempts, 2, 'An interrupted catalog attempt must remain in the bounded attempt budget');
+    assert.equal(indexRecovery.savedA[0].id, 'a');
+    assert.equal(indexRecovery.savedB[0].id, 'b');
     assert.equal(restoredOrder, false, 'Classic ordering preference survives a real renderer reload in isolated IndexedDB');
     assert.equal(afterReload.progress.snapshot.state, 'interrupted', 'Renderer replacement must interrupt orphan runs without auto-resume');
     assert.equal(afterReload.progress.snapshot.chaptersStarted, beforeReload, 'Renderer replacement must preserve the cumulative budget');
@@ -92,7 +119,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + hubChecks.length + priorityChecks.length + 7} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + priorityChecks.length + 13} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);

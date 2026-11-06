@@ -24,6 +24,7 @@
     import VirtualList from '../lib/VirtualList.svelte';
     // UI : Stores
     import {Store as UI } from '../stores/Stores.svelte';
+    import { MangaPlugin } from '../../../engine/providers/MangaPlugin';
     import PluginOrder from './arabic-manga/PluginOrder.svelte';
     import { OrderPlugins, OpenPlugin } from '../models/PluginPresentation';
     import { Settings } from '../stores/Settings.svelte';
@@ -86,11 +87,10 @@
 
     loadPlugin = loadMedias(UI.selectedPlugin);
     $effect(() => {
-        const previousPlugin = currentPlugin;
         loadPlugin = Promise.resolve(UI.selectedPlugin);
         currentPlugin = UI.selectedPlugin;
         pluginDropdownSelected = currentPlugin?.Identifier;
-        if (!disablePluginRefresh && !currentPlugin?.IsSameAs(previousPlugin))
+        if (!disablePluginRefresh && UI.page === 'media')
             loadMedias(UI.selectedPlugin);
         disablePluginRefresh = false;
     });
@@ -100,6 +100,8 @@
         plugin: MediaContainer<MediaChild>,
     ): Promise<MediaContainer<MediaChild>> {
         if (!plugin) return;
+        if (plugin instanceof MangaPlugin) await plugin.RefreshMediaListCache();
+        if (plugin !== UI.selectedPlugin) return plugin;
         const loadedmedias =
             (plugin.Entries.Value as MediaContainer<MediaChild>[]) ?? [];
         fuse = new Fuse(loadedmedias, {

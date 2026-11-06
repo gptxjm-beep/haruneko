@@ -1,37 +1,7 @@
 import { type StorageController, Store } from './StorageController';
 
-const DataBase = 'HakuNeko';
-
-const enum InternalStore {
-    TemporaryData = 'TemporaryData',
-}
-
-type UnitedStore = Store | InternalStore;
-
-const VersionUpgrades = [
-    // V0 => V1
-    function V1(db: IDBDatabase) {
-        db.createObjectStore(Store.Settings);
-    },
-    // V1 => V2
-    function V2(db: IDBDatabase) {
-        db.createObjectStore(Store.Bookmarks);
-    },
-    // V2 => V3
-    function V3(db: IDBDatabase) {
-        db.createObjectStore(Store.MediaLists);
-    },
-    // V3 => V4
-    function V4(db: IDBDatabase) {
-        db.createObjectStore(InternalStore.TemporaryData);
-    },
-    // V4 => V5
-    function V5(db: IDBDatabase) {
-        db.createObjectStore(Store.Itemflags);
-    },
-];
-
-const Version = VersionUpgrades.length;
+import { InternalStore, OpenMediaDatabase, type UnitedStore } from './catalog/MediaDatabase';
+import { SaveManualMediaList } from './catalog/SiteIndexRepository';
 
 /**
  * A storage controller that uses the {@link indexedDB} and the {@link https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API|File System Access API}.
@@ -43,19 +13,7 @@ export class StorageControllerBrowser implements StorageController {
         navigator.storage.persist().catch(console.warn);
     }
 
-    private async Connect(): Promise<IDBDatabase> {
-        const connection = indexedDB.open(DataBase, Version);
-        return new Promise<IDBDatabase>((resolve, reject) => {
-            connection.onupgradeneeded = (event: IDBVersionChangeEvent) => {
-                const db = connection.result; // => event.target.result
-                for(let version = event.oldVersion; version < event.newVersion; version++) {
-                    VersionUpgrades[version](db);
-                }
-            };
-            connection.onsuccess = () => resolve(connection.result);
-            connection.onerror = () => reject(connection.error);
-        });
-    }
+    private Connect(): Promise<IDBDatabase> { return OpenMediaDatabase(); }
 
     private async SaveIDB<T>(value: T, store: UnitedStore, key?: string): Promise<void> {
         const db = await this.Connect();
@@ -105,6 +63,7 @@ export class StorageControllerBrowser implements StorageController {
         // May instead use: https://developer.chrome.com/docs/extensions/reference/storage/
         //                  chrome.storage.local.set({ key: data }, () => {});
         //return localStorage.setItem(`${store}.${key}`, JSON.stringify(value));
+        if (store === Store.MediaLists && key) return SaveManualMediaList(key, value);
         return this.SaveIDB(value, store, key);
     }
 

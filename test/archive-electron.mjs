@@ -30,6 +30,8 @@ try {
         HARUNEKO_ARCHIVE_TEST_SCRIPT: path.resolve('test/archive-electron-renderer.mjs'),
         HARUNEKO_ARCHIVE_UI_TEST_SCRIPT: path.resolve('test/archive-ui-renderer.mjs'),
         HARUNEKO_ARABIC_HUB_TEST_SCRIPT: path.resolve('test/arabic-hub-renderer.mjs'),
+        HARUNEKO_SITE_INDEX_TEST_SCRIPT: path.resolve('test/site-index-renderer.mjs'),
+        HARUNEKO_SITE_INDEX_MIGRATION_TEST_SCRIPT: path.resolve('test/site-index-migration-renderer.mjs'),
         HARUNEKO_PRIORITY_TEST_SCRIPT: process.env.HARUNEKO_PRIORITY_CONNECTORS ? path.resolve('test/arabic-priority-renderer.mjs') : '',
     };
     delete env.ELECTRON_RUN_AS_NODE;
