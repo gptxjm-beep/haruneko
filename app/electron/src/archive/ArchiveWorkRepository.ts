@@ -206,6 +206,8 @@ export class ArchiveWorkRepository {
         if (command.operation === 'archive-events') return this.database.prepare('SELECT * FROM archive_events WHERE session_id=? AND id>? ORDER BY id LIMIT 100').all(sessionId, Count(command.after ?? 0, 'event cursor', Number.MAX_SAFE_INTEGER));
         if (command.operation === 'archive-run-state') {
             if (!['paused', 'cancelled', 'interrupted', 'limited', 'review', 'drained', 'failed'].includes(command.state)) throw new Error('Invalid run transition');
+            // A late renderer error cannot undo an explicit durable cancellation. Keep its diagnostic instead.
+            if (run.state === 'cancelled' && command.state === 'failed') return this.Event(sessionId, 'late-error-after-cancel', command.reason);
             return this.Transaction(() => {
                 this.database.prepare('UPDATE archive_runs SET state=?,reason=? WHERE session_id=?').run(command.state, SafeMessage(command.reason), sessionId);
                 if (command.state !== 'paused') this.database.prepare('UPDATE archive_runs SET storage_error=NULL WHERE session_id=?').run(sessionId);

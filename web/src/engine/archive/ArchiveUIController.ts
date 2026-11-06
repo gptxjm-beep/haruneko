@@ -33,8 +33,8 @@ export class ArchiveUIController {
         if (!this.Supported(site)) throw new Error('The original manga connector is unavailable. The session has been preserved.');
         const manager = new ArchiveManager(site, this.downloads, this.Client, sessionId, session.snapshot.policy);
         this.active.set(sessionId, manager);
-        void manager.Start().catch(async () => {
-            await this.Client.Request({ operation: 'archive-run-state', sessionId, state: 'failed', reason: 'Archive execution failed; progress remains saved. Inspect errors before retrying.' });
+        void manager.Start().catch(async error => {
+            await this.Client.Request({ operation: 'archive-run-state', sessionId, state: 'failed', reason: `Archive execution failed: ${ArchiveUIError(error)}` });
         }).catch(() => { /* SQLite may be unavailable; startup recovery marks an unclosed run interrupted. */ })
             .finally(() => this.active.delete(sessionId));
     }
