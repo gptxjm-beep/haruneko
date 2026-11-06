@@ -76,6 +76,7 @@ export class ArchiveStorageController {
     }
 
     public async ReleaseFile(fileId: string): Promise<void> { this.fileChecks.delete(fileId); await this.Safety.Release(`file:${fileId}`); }
+    public async ReleaseAll(): Promise<void> { this.attempts.clear(); this.fileChecks.clear(); await this.Safety.ReleaseAll(); }
     public async ReleaseAttempt(attemptId: string): Promise<void> {
         this.attempts.delete(attemptId);
         await this.Safety.Release(`attempt:${attemptId}`);

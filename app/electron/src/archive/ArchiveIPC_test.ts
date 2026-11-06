@@ -7,8 +7,8 @@ vi.mock('electron', () => ({ app: { once: vi.fn(), getPath: vi.fn() }, dialog: {
 
 function fixture() {
     const frame = { url: 'https://app.hakuneko.download/' };
-    const contents = { mainFrame: frame };
-    return { frame, window: { webContents: contents } as unknown as BrowserWindow,
+    const contents = { mainFrame: frame, on: vi.fn(), off: vi.fn() };
+    return { frame, contents, window: { webContents: contents } as unknown as BrowserWindow,
         event: { sender: contents, senderFrame: frame } as unknown as IpcMainInvokeEvent };
 }
 
@@ -49,6 +49,32 @@ describe('Archive IPC authority boundary', () => {
         expect(() => handler(f.event, [])).toThrow('Invalid');
         expect(() => handler(f.event, {})).toThrow('Invalid');
         expect(app.getPath).not.toHaveBeenCalled();
+        await service.Close();
+        const removed = vi.mocked(ipcMain.removeHandler).mock.calls.length;
+        await service.Close();
+        expect(vi.mocked(ipcMain.removeHandler).mock.calls.length).toBe(removed);
+    });
+
+    it('Should reject old renderer requests during navigation before opening the database', async () => {
+        const f = fixture();
+        const service = new ArchiveIPC(f.window, 'https://app.hakuneko.download');
+        const handler = vi.mocked(ipcMain.handle).mock.calls.at(-1)![1];
+        const on = f.contents.on;
+        const navigate = on.mock.calls.find(call => call[0] === 'did-start-navigation')![1] as (details: unknown) => void;
+        navigate({ isMainFrame: true, isSameDocument: false });
+        expect(() => handler(f.event, { operation: 'ui-sessions' })).toThrow('renderer is changing');
+        await service.Close();
+    });
+
+    it('Should discard queued requests accepted before renderer replacement', async () => {
+        const f = fixture();
+        const service = new ArchiveIPC(f.window, 'https://app.hakuneko.download');
+        const handler = vi.mocked(ipcMain.handle).mock.calls.at(-1)![1];
+        const pending = handler(f.event, { operation: 'ui-sessions' });
+        const on = f.contents.on;
+        const navigate = on.mock.calls.find(call => call[0] === 'did-start-navigation')![1] as (details: unknown) => void;
+        navigate({ isMainFrame: true, isSameDocument: false });
+        await expect(pending).resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining('replaced renderer') } });
         await service.Close();
     });
 });

@@ -120,6 +120,23 @@ if (process.argv[2] === 'crash-child') {
         db.close();
     });
 
+    await check('Archiving defaults and prepared sessions survive repository reopen without auto-start', async () => {
+        const f = await fixture();
+        try {
+            const value = f.repository.UI.Preferences();
+            value.rootId = f.grant.rootId; value.policy.delayMs = 2000;
+            f.repository.UI.Save(value);
+            const id = f.repository.UI.Create('ui-fixture', 'UI fixture', value, true);
+            f.repository.Close();
+            const reopened = new ArchiveRepository(f.filename);
+            try {
+                assert.equal(reopened.UI.Preferences().policy.delayMs, 2000);
+                assert.equal(reopened.UI.Session(id).snapshot.state, 'paused');
+                assert.equal(reopened.UI.Session(id).snapshot.chaptersStarted, 0);
+            } finally { reopened.Close(); }
+        } finally { await f.close(); }
+    });
+
     await check('Session identity and chapter ordering survive reopen', async () => {
         const f = await fixture();
         try {
@@ -307,7 +324,7 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 5);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 6);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });

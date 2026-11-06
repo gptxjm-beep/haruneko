@@ -23,16 +23,45 @@ export class ArchiveIPC {
     private storage!: ArchiveStorageController;
     private readonly safety: ArchiveStorageSafety;
     private readonly bootstrapSafety: ArchiveStorageSafety;
+    private rendererRecoveryError?: Error;
+    private closing?: Promise<void>;
+    private navigating = false;
+    private rendererEpoch = 0;
+    private readonly navigation = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+        if (details.isMainFrame && !details.isSameDocument) { this.navigating = true; this.rendererEpoch++; this.InterruptRenderer(); }
+    };
+    private readonly rendererGone = () => { this.navigating = true; this.rendererEpoch++; this.InterruptRenderer(); };
+    private readonly rendererLoaded = () => { this.navigating = false; };
+
+    private InterruptRenderer(): void {
+        if (!this.repository) return;
+        const recovery = this.serial.then(async () => {
+            try {
+                await this.files.Close();
+                await this.storage.ReleaseAll();
+                this.repository.RecoverInterrupted();
+            } catch { this.rendererRecoveryError = new Error('Archive interruption requires an application restart before further operations'); }
+        });
+        this.serial = recovery;
+    }
 
     constructor(private readonly window: BrowserWindow, private readonly origin: string, options: { storagePolicy?: ArchiveStoragePolicy; storageProbe?: ArchiveVolumeProbe } = {}) {
         this.safety = new ArchiveStorageSafety(options.storagePolicy ?? DefaultArchiveStoragePolicy, options.storageProbe);
         this.bootstrapSafety = new ArchiveStorageSafety({ reserveBytes: 0n, metadataHeadroomBytes: (options.storagePolicy ?? DefaultArchiveStoragePolicy).metadataHeadroomBytes }, options.storageProbe);
+        this.window.webContents.on?.('did-start-navigation', this.navigation);
+        this.window.webContents.on?.('render-process-gone', this.rendererGone);
+        this.window.webContents.on?.('did-finish-load', this.rendererLoaded);
         ipcMain.handle(ArchiveChannel, (event, command) => {
             AssertArchiveSender(event, this.window, this.origin);
+            if (this.navigating || this.closing) throw new Error('Archive renderer is changing or the service is closing');
             if (!command || typeof command !== 'object' || Array.isArray(command) || typeof command.operation !== 'string') throw new Error('Invalid archive command');
             if (this.pending >= 128) throw new Error('Archive service is busy');
             this.pending++;
-            const operation = this.serial.then(() => this.Execute(command));
+            const epoch = this.rendererEpoch;
+            const operation = this.serial.then(() => {
+                if (epoch !== this.rendererEpoch) throw new Error('Archive request belonged to a replaced renderer');
+                return this.Execute(command);
+            });
             this.serial = operation.catch(() => {});
             return operation.then(value => ({ ok: true, value })).catch(error => {
                 const databaseError = String(error.code ?? '').includes('SQLITE') || /database or disk is full/i.test(error.message ?? '');
@@ -44,11 +73,18 @@ export class ArchiveIPC {
         });
         app.once('before-quit', event => {
             event.preventDefault();
-            this.Close().finally(() => app.quit());
+            void this.Close().catch(() => console.error('Archive shutdown could not finish; recovery is required on the next start')).finally(() => app.quit());
         });
     }
 
-    public async Close(): Promise<void> {
+    public Close(): Promise<void> { return this.closing ??= this.CloseInternal(); }
+
+    private async CloseInternal(): Promise<void> {
+        if (!this.window.isDestroyed?.() && !this.window.webContents.isDestroyed?.()) {
+            this.window.webContents.off?.('did-start-navigation', this.navigation);
+            this.window.webContents.off?.('render-process-gone', this.rendererGone);
+            this.window.webContents.off?.('did-finish-load', this.rendererLoaded);
+        }
         ipcMain.removeHandler(ArchiveChannel);
         await this.serial;
         try { await this.files?.Close(); }
@@ -56,11 +92,13 @@ export class ArchiveIPC {
     }
 
     private async Execute(command: ArchiveCommand): Promise<unknown> {
+        if (this.rendererRecoveryError) throw this.rendererRecoveryError;
         if (!this.repository) {
             await this.bootstrapSafety.Check([{ slot: 'bootstrap', path: app.getPath('userData'), location: 'database', bytes: 0n }]);
             const browser = this.window.webContents.session.getStoragePath();
             if (!browser) throw new ArchiveStorageError({ code: 'unmeasurable', location: 'browser-profile' });
             this.repository = new ArchiveRepository(path.join(app.getPath('userData'), 'archive', 'state.sqlite'));
+            this.safety.ConfigureReserve(BigInt(this.repository.UI.Preferences().reserveGiB) * 1024n ** 3n);
             this.storage = new ArchiveStorageController(this.repository, { profile: app.getPath('userData'), browser,
                 staging: this.repository.StagingDirectory, scratch: app.getPath('temp') }, this.safety);
             this.files = new ArchiveFiles(this.repository, undefined, this.storage);
@@ -77,6 +115,17 @@ export class ArchiveIPC {
         }
         if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
         switch (command.operation) {
+            case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };
+            case 'ui-save-preferences': {
+                const validated = this.repository.UI.Validate(command.preferences);
+                const previous = this.repository.UI.Preferences();
+                if (validated.reserveGiB !== previous.reserveGiB) this.safety.ConfigureReserve(BigInt(validated.reserveGiB) * 1024n ** 3n);
+                try { return this.repository.UI.Save(validated); }
+                catch(error) { if (validated.reserveGiB !== previous.reserveGiB) this.safety.ConfigureReserve(BigInt(previous.reserveGiB) * 1024n ** 3n); throw error; }
+            }
+            case 'ui-create-session': return this.repository.UI.Create(command.siteId, command.siteName, command.preferences, command.confirmed);
+            case 'ui-sessions': return this.repository.UI.Sessions(command.before);
+            case 'ui-progress': return this.repository.UI.Progress(command.sessionId);
             case 'storage-check': return this.storage.CheckSession(command.sessionId);
             case 'storage-image': return this.storage.Image(command.attemptId, command.bytes, command.quota);
             case 'storage-image-preflight': return this.storage.Image(command.attemptId, 64 * 1024 ** 2, command.quota, true);

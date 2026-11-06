@@ -64,7 +64,7 @@ describe('Persistent archive work queue', () => {
             expect(database.prepare("SELECT name FROM sqlite_master WHERE name='archive_runs'").get()).toBeUndefined();
             database.exec('DROP TABLE archive_work');
             MigrateArchiveDatabase(database);
-            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(5);
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(6);
         } finally { database.close(); }
     });
 

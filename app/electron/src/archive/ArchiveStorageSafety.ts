@@ -25,8 +25,22 @@ export class ArchiveStorageSafety {
     private readonly identities = new Map<string, string>();
     private serial: Promise<unknown> = Promise.resolve();
 
-    constructor(public readonly Policy: ArchiveStoragePolicy = DefaultArchiveStoragePolicy, private readonly probe: ArchiveVolumeProbe = ProbeArchiveVolume) {
-        if (Policy.reserveBytes < 0n || Policy.metadataHeadroomBytes < 0n) throw new Error('Invalid archive storage policy');
+    constructor(private policy: ArchiveStoragePolicy = DefaultArchiveStoragePolicy, private readonly probe: ArchiveVolumeProbe = ProbeArchiveVolume) {
+        if (policy.reserveBytes < 0n || policy.metadataHeadroomBytes < 0n) throw new Error('Invalid archive storage policy');
+    }
+
+    public get Policy(): ArchiveStoragePolicy { return this.policy; }
+
+    /** Called only by the serialized main-process preferences command, with no open runs or reservations. */
+    public ConfigureReserve(bytes: bigint): void {
+        if (bytes < 50n * 1024n ** 3n || bytes > 4096n * 1024n ** 3n || this.owners.size) throw new Error('Storage reserve cannot change while writes are reserved');
+        this.policy = Object.freeze({ ...this.Policy, reserveBytes: bytes });
+    }
+
+    public async ReleaseAll(): Promise<void> {
+        const operation = this.serial.then(() => { this.owners.clear(); });
+        this.serial = operation.catch(() => {});
+        await operation;
     }
 
     public Reserve(owner: string, claims: ArchiveStorageClaim[]): Promise<void> {
