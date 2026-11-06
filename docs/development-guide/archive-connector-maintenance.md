@@ -1,6 +1,6 @@
 # متطلبات صيانة الموصلات المرتبطة بالأرشفة
 
-يجمع هذا التقرير فجوات عقد الموصلات وبلاغات عربية مرصودة من المستخدم. لا يدعي إعادة إنتاج المشكلات حيًا على الفرع الحالي. لم يُعدل أي موصل، ولم تُجرَ أرشفة حية.
+يجمع هذا التقرير فجوات عقد الموصلات وبلاغات عربية مرصودة من المستخدم. البلاغات التالية حُفظت أولًا في المرحلة الرابعة؛ تحديث المرحلة السادسة A وحصر الموصلات في نهاية التقرير يميزان الإصلاحات المحلية المثبتة عن الاختبار الحي الذي تعذر تنفيذه.
 
 | القدرة | الواجهة الحالية | المطلوب من صيانة الموصل |
 | --- | --- | --- |
@@ -36,3 +36,97 @@
 - **أدلة آمنة:** سجل هوية الاختبار ورقم البناء والترتيب والحالة ونوع البيانات والحجم والأبعاد والمضيف والمسار المنقح فقط عند الحاجة. لا تحفظ Cookies أو Authorization أو رموز جلسة أو استعلامات روابط موقعة أو نصوص HTML قد تتضمن أسرارًا. تُزال الأسرار قبل التسجيل، ولا تُحفظ الروابط الحساسة ثم تُنقح لاحقًا.
 
 أي اختبار حي لاحق مشروط بوصول مصرح به وشروط المصدر. CAPTCHA أو الحماية أو المحتوى غير المتاح تُسجل كقيود وصول؛ لا يُحاول تجاوزها. يبدأ إصلاح الموصل في مرحلة منفصلة باختبار مقارنة يعيد إنتاج الفرق بين العينات السليمة والمتعطلة، ثم يُعاد بعد الإصلاح.
+
+
+## تحديث المرحلة السادسة A والحصر المسجل
+
+نفذت إصلاحات محدودة لاستخراج صور MangaTek وMangaLover على الفرع `fix/arabic-connectors-priority`، بعد اختبارات تراجع معزولة. لم تُثبت معالجة أعطال Bleach أو Boy’s Abyss أو MangaTek حيًا؛ رفض وكيل البيئة CONNECT للمضيفين بـ403 قبل الوصول إليهما. لا يمثل ذلك HTTP 403 صادرًا عن الموقع، ولم تُحاول وسيلة وصول بديلة.
+
+- **AR-IMG-001:** ثبت محليًا أن مسار MangaTek القديم لا يقرأ `data-lazy-src` أو قائمة `srcset`؛ كان يدعم `data-src` بالفعل. أصبح يستخدم مستخرجًا اختياريًا يدعم المصادر المذكورة ويحافظ على ترتيب DOM. نسبة أبعاد الصورة منفصلة: اختبر العارض المحلي صورة 20×2000 واحتفظ بأبعادها واستعمل `contain` في المعاينة؛ لا دليل على عطل عرض خاص بالموقع الحي.
+- **AR-IMG-002:** ثبت محليًا أن مسار Madara القديم يحول `srcset` متعدد المرشحين إلى رابط واحد خاطئ. فُعّل مستخرج المرشحين في MangaLover وحده، مع الإبقاء على سلوك الموصلات الأخرى الافتراضي. مقارنة مضيفين محليين أثبتت رفض HTML وقبول PNG ذي MIME خاطئ، لكنها لا تحدد استجابات خوادم Bleach أو Boy’s Abyss الفعلية.
+- **AR-LIST-001:** لا يوجد حد 50 صريح في مسار AJAXv2 وفك HTML الحاليين. نجحت عينتا 364 فصلًا و50 عنصرًا دون اقتطاع محلي أو اختلاق فصول من آخر رقم. بقي احتمال التقسيم أو التحديد من الخادم غير متحقق؛ لم يُضف ترقيم صفحات متخيل ولم يُدّع اكتمال المصدر.
+
+التفاصيل والاختبارات والقيود في [تقرير المرحلة السادسة A](./arabic-connectors-priority.md).
+
+### منهج الحصر وحالة الأدلة
+
+الحصر التالي مولّد بتحليل AST دون تشغيل الموصلات أو إرسال طلبات، بواسطة:
+
+```sh
+node web/scripts/arabic-connector-inventory.mjs
+node web/scripts/arabic-connector-inventory.mjs --json
+```
+
+وجد **59 موصلًا فعليًا مسجلًا**: **30** يذكر العربية صراحة، و**35** يعلن تعدد اللغات، بينها **6** مشتركة. ذكر العربية في خريطة اللغات لا يعني أن الموقع عربي فقط. ووسم Multilingual وحده **لا يثبت دعم العربية**. توجد أيضًا ثلاثة موصلات اختبار محلية `_mocks_`: `bot-check` و`sheep-scanlations` و`sheep-scanlations-broken`؛ مستبعدة من جدول المواقع الفعلية، وتظهر منفصلة في خرج JSON.
+
+الاسم والمعرّف والرابط مأخوذة من معاملات المنشئ المسجلة في الشيفرة. هذا لا يثبت أن النطاق ما زال يعمل. وجود ملف E2E يعني وجود تعريف اختبار فقط، وليس نتيجة نجاح سابقة أو حالية. حالة التشغيل الحي لكل الصفوف **غير مختبرة في هذه المرحلة**؛ الموصلان P1 فقط لديهما دليل إصلاح محلي جديد.
+
+- **P1:** استكمال مقارنة العينات الحية للموقعين عند توفر وصول مصرح به، مع فصل عطل الصور عن تغطية الفصول. لا تعتبر نتائج المختبر إغلاقًا للبلاغات الحية.
+- **P2:** بقية الموصلات التي تصرح بالعربية؛ تبدأ المرحلة السادسة B بعينات صغيرة من عائلات الاستخراج المشابهة، ثم الموصلات ذات APIs متعددة اللغات. الأولوية مبنية على اللغة والبنية، وليس ادعاء عطل.
+- **P3:** الموصلات المتعددة التي لا تصرح بالعربية في الشيفرة؛ تحقق أولًا من اللغات الفعلية والقدرات وشروط الوصول، ثم حدد الحاجة إلى صيانة عربية.
+
+| المصدر | المعرّف | الرابط المسجل | إعلان اللغة | البنية | الاختبار الحي المسجل | الأولوية |
+| --- | --- | --- | --- | --- | --- | --- |
+| 3asq (مانجا العاشق) (MangaLover.ts) | `mangalover` | https://3asq.online | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P1 |
+| MangaTek (MangaTek.ts) | `mangatek` | https://mangatek.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P1 |
+| ArabsHentai (ArabsHentai.ts) | `arabshentai` | https://arabshentai.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| ArabToons (ArabToons.ts) | `arabtoons` | https://arabtoons.net | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| ازورا مانجا (AZORA MANGA / WORLD) (AzoraWorld.ts) | `azoraworld` | https://azorafly.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| Dilar (Dilar.ts) | `dilar` | https://dilar.tube | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| Fastest Manga (FastestManga.ts) | `fastestmanga` | https://www.fastestmanga.com | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| Kol Novel (ملوك الروايات) (KolNovel.ts) | `kolnovel` | https://kolnovel.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaBall (MangaBall.ts) | `mangaball` | https://mangaball.com | متعدد؛ العربية معلنة في الشيفرة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaDex (MangaDex.ts) | `mangadex` | https://mangadex.org | متعدد؛ العربية معلنة في الشيفرة | custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaDotNet (MangaDotNet.ts) | `mangadotnet` | https://mangadot.net | متعدد؛ العربية معلنة في الشيفرة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| مانجا ليك (Mangalek) (Mangalek.ts) | `mangalek` | https://mangalik.net | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| MangaLink (MangaLink.ts) | `mangalink` | https://link-manga.net | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| Manga Million (MangaMillion.ts) | `mangamillion` | https://mangamillion.shueisha.co.jp | متعدد؛ العربية معلنة في الشيفرة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| Manga Origin (MangaOrigin.ts) | `mangaorigin` | https://mangaoriginread.blogspot.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| ProChan (MangaPro.ts) | `mangapro` | https://prochan.net | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| مانجا سبارك (MangaSpark) (MangaSpark.ts) | `mangaspark` | https://sparkmanga.net | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| مانجا ستارز (Mangastarz) (MangaStarz.ts) | `mangastarz` | https://starzmanga.com | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| MangaSwat (MangaSwat.ts) | `mangaswat` | https://meshmanga.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaTales (MangaTales.ts) | `mangatales` | https://mangatales.com | العربية معلنة | custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaTime (MangaTime.ts) | `mangatime` | https://mangatime.org | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| MangaToon (Arabic) (MangaToonAR.ts) | `mangatoon-ar` | https://ar.mangatoon.mobi | العربية معلنة | custom | موجود؛ لم ينفذ حيًا | P2 |
+| HentaiLek (ManHatic.ts) | `manhatic` | https://hentailek.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| مدونة نيجي (Niji Translations) (NijiTranslations.ts) | `nijitranslations` | https://niji-translations.com | العربية معلنة | Madara | موجود؛ لم ينفذ حيًا | P2 |
+| مانجا اون لاين (On-Manga) (OnMangaMe.ts) | `on-manga` | https://www.onma.top | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| SenManga (SenManga.ts) | `senmanga` | https://www.senmanga.com | متعدد؛ العربية معلنة في الشيفرة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| موقع شقاع (Shqqaa) (Shqqaa.ts) | `shqqaa` | https://www.shqqaa.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| Stellar Saber (StellarSaber.ts) | `stellarsaber` | https://stellarsaber.pro | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| Team X (Team1x1.ts) | `team1x1` | https://olympustaff.com | العربية معلنة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| XComic (XComic.ts) | `xcomic` | https://xcomic.net | متعدد؛ العربية معلنة في الشيفرة | Common/custom | موجود؛ لم ينفذ حيًا | P2 |
+| 3Hentai (ThreeHentai.ts) | `3hentai` | https://3hentai.net | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Akuma.moe (Akuma.ts) | `akuma` | https://akuma.moe | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| AsmHentai (AsmHentai.ts) | `asmhentai` | https://asmhentai.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| FavComic (FavComic.ts) | `favcomic` | https://www.favcomic.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Grabber Zone (GrabberZone.ts) | `grabberzone` | https://grabber.zone | متعدد؛ العربية غير مثبتة بالوسم العام | Madara | موجود؛ لم ينفذ حيًا | P3 |
+| HentaiHall (HentaiHall.ts) | `hentaihall` | https://hentaihall.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| HentaiHand (HentaiHand.ts) | `hentaihand` | https://hentaihand.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Hitomi (Hitomi.ts) | `hitomi` | https://hitomi.la | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Honeytoon (Honeytoon.ts) | `honeytoon` | https://honeytoon.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Imgur (Imgur.ts) | `imgur` | https://imgur.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| IMHentai (IMHentai.ts) | `imhentai` | https://imhentai.xxx | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| LectorXD (LectorXD.ts) | `lectorxd` | https://lectorxd.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Line Webtoon (LineWebtoon.ts) | `linewebtoon` | https://www.webtoons.com | متعدد؛ العربية غير مثبتة بالوسم العام | custom | موجود؛ لم ينفذ حيًا | P3 |
+| Lunar Animes (LunarAnimes.ts) | `lunaranimes` | https://lunarx.to | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Luscious (Luscious.ts) | `luscious` | https://www.luscious.net | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Manga18fx (Manga18FX.ts) | `manga18fx` | https://manga18fx.com | متعدد؛ العربية غير مثبتة بالوسم العام | Madara | موجود؛ لم ينفذ حيًا | P3 |
+| MangaDNA (MangaDNA.ts) | `mangadna` | https://mangadna.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| MangaForFree (MangaForFree.ts) | `mangaforfree` | https://mangaforfree.com | متعدد؛ العربية غير مثبتة بالوسم العام | Madara | موجود؛ لم ينفذ حيًا | P3 |
+| MangaLivre (.blog) (MangaLivreBlog.ts) | `mangalivreblog` | https://mangalivre.blog | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Manga Plus Creators (MangaPlusCreators.ts) | `mangapluscreators` | https://mangaplus-creators.jp | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| MangaPlus.tv (MangaplusTV.ts) | `mangaplustv` | https://mangaplus.shueisha.tv | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Manhwa-Raw (ManhwaDashRaw.ts) | `manhwadashraw` | https://manhwa-raw.com | متعدد؛ العربية غير مثبتة بالوسم العام | Madara | موجود؛ لم ينفذ حيًا | P3 |
+| MultPorn (MultPorn.ts) | `multporn` | https://multporn.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| NamiComi (NamiComi.ts) | `namicomi` | https://namicomi.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| NHentai (NHentai.ts) | `nhentai` | https://nhentai.net | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Onisaga (Onisaga.ts) | `onisaga` | https://onisaga.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| RawDevart (RawDevart.ts) | `rawdevart` | https://rawdevart.art | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| RokuHentai (RokuHentai.ts) | `rokuhentai` | https://rokuhentai.com | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+| Yaoi Haven Reborn (YaoiHavenReborn.ts) | `yaoihavenreborn` | https://www.yaoihavenreborn.com/ | متعدد؛ العربية غير مثبتة بالوسم العام | Common/custom | موجود؛ لم ينفذ حيًا | P3 |
+
+### آلية فحص المرحلة السادسة B
+
+لكل موصل، افحص قائمة صغيرة وفصلًا عامًا متاحًا وفق شروطه، وسجل منفصلًا: اكتشاف المانجات، وتغطية فهرس الفصول، وترتيب وهويات الصفحات، ونوع البيانات الفعلي، والتنزيل والعرض، والإلغاء وإعادة المحاولة. افحص صورًا مبكرة ووسطية وأخيرة بدل الاكتفاء بـentry واحد. الحالة تكون «نجاح العينة» أو «فشل مثبت» أو «وصول مقيد» أو «لم يختبر»، ولا تتحول إلى إثبات صحة الموقع كله. اختبر كل إصلاح محليًا ثم حيًا عند السماح قبل توسيع نطاقه؛ لا تفعل المستخرج الاختياري على جميع موصلات Madara تلقائيًا.
