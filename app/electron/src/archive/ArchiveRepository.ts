@@ -105,6 +105,12 @@ export class ArchiveRepository {
         return String(root.path);
     }
 
+    public RootStorageIdentity(rootId: string): string {
+        const row = this.database.prepare('SELECT identity FROM roots WHERE id=?').get(Text(rootId, 'root ID', 64));
+        if (!row?.identity) throw new Error('Archive root requires an explicit directory grant');
+        return String(row.identity);
+    }
+
     public VerifyRoot(rootId: string): string {
         const root = this.database.prepare('SELECT * FROM roots WHERE id=?').get(Text(rootId, 'root ID', 64));
         if (!root || !root.identity) throw new Error('Archive root requires an explicit directory grant');
