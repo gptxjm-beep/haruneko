@@ -32,6 +32,7 @@ try {
         HARUNEKO_ARABIC_HUB_TEST_SCRIPT: path.resolve('test/arabic-hub-renderer.mjs'),
         HARUNEKO_SITE_INDEX_TEST_SCRIPT: path.resolve('test/site-index-renderer.mjs'),
         HARUNEKO_SHARED_SEARCH_TEST_SCRIPT: path.resolve('test/shared-search-renderer.mjs'),
+        HARUNEKO_SELECTIVE_QUEUE_TEST_SCRIPT: path.resolve('test/selective-queue-renderer.mjs'),
         HARUNEKO_SITE_INDEX_MIGRATION_TEST_SCRIPT: path.resolve('test/site-index-migration-renderer.mjs'),
         HARUNEKO_PRIORITY_TEST_SCRIPT: process.env.HARUNEKO_PRIORITY_CONNECTORS ? path.resolve('test/arabic-priority-renderer.mjs') : '',
     };

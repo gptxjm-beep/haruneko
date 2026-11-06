@@ -27,6 +27,7 @@ export class SearchWorkerClient {
         return operation;
     }
     public Find(siteId: string, mangaId: string): Promise<{ id: string; title: string } | null> { return this.Request({ operation: 'find', siteId, mangaId }); }
+    public Contains(references: { siteId: string; mangaId: string }[]): Promise<boolean[]> { return this.Request({ operation: 'contains', references: references.map(ref => ({ siteId: ref.siteId, mangaId: ref.mangaId })) }); }
     public Cancel(): void {
         if (this.searchId !== undefined) { this.pending.get(this.searchId)?.reject(new DOMException('Search superseded', 'AbortError')); this.pending.delete(this.searchId); }
         this.searchId = undefined;

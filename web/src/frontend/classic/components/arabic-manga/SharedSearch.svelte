@@ -7,8 +7,16 @@
     import { IndexStateLabel } from '../../../../engine/catalog/SiteIndexController';
     import { Store as UI } from '../../stores/Stores.svelte';
     import Result from './SearchResult.svelte';
+    import { GetSelectiveQueueController, QueueSupported, QueueIdentity } from '../../../../engine/archive/SelectiveQueueController';
 
     const controller = GetLocalSearchController();
+    const queue = GetSelectiveQueueController();
+    let queueView = $state(queue.State.Value);
+    const queueObserver = value => { queueView = value; };
+    queue.State.Subscribe(queueObserver);
+    const reference = (row: SearchRow) => ({ siteId: row.siteId, mangaId: row.mangaId, title: row.title, siteName: controller.Sites().find(site => site.id === row.siteId)?.title ?? row.siteId });
+    async function queueAction(action: () => Promise<void>) { try { await action(); } catch(error) { queue.Error(error); } }
+    $effect(() => { if (view.result && QueueSupported()) void queueAction(() => queue.Flags(view.result!.groups.flatMap(group => group.rows.map(reference)))); });
     let view = $state(controller.State.Value);
     let loaded = $state(false), opening = $state(false), openingError = $state('');
     let panel: HTMLDivElement = $state();
@@ -22,7 +30,8 @@
         if (view.preference.query.trim()) controller.Query({}, 0);
         await tick(); if (panel) panel.scrollTop = view.preference.scroll;
     }); });
-    onDestroy(() => { ++openToken; clearTimeout(scrollTimer); controller.SetScroll(lastScroll); controller.State.Unsubscribe(observe); });
+    onMount(() => { if (QueueSupported()) void queueAction(() => queue.Refresh()); });
+    onDestroy(() => { ++openToken; clearTimeout(scrollTimer); controller.SetScroll(lastScroll); controller.State.Unsubscribe(observe); queue.State.Unsubscribe(queueObserver); });
     $effect(() => { if (view.status === 'ready' && panel) { panel.scrollTop = view.preference.scroll; lastScroll = view.preference.scroll; } });
     function change(value: Partial<SearchPreference>) {
         ++openToken; opening = false; openingError = ''; lastScroll = 0;
@@ -45,6 +54,13 @@
 </script>
 <section aria-labelledby="shared-search-title" data-testid="shared-search">
     <h2 id="shared-search-title">البحث المشترك في الفهارس المحلية</h2>
+    {#if QueueSupported()}
+        <p data-testid="selection-total">المحدد: {queueView.summary?.selected ?? 0} • في القائمة: {queueView.summary?.queued ?? 0}</p>
+        <Button kind="secondary" onclick={() => UI.hubSection = 'selections'}>مراجعة الاختيارات</Button>
+        <Button kind="secondary" onclick={() => queueAction(() => queue.Add())}>Add Selected to Queue</Button>
+        {#if queueView.message}<p role="status">{queueView.message}</p>{/if}
+        {#if queueView.error}<p role="alert">{queueView.error}</p>{/if}
+    {:else}<p>حفظ الاختيارات وقائمة التنزيل يتطلبان Electron. البحث المحلي متاح.</p>{/if}
     <p class="intro">البحث في القوائم المقبولة المحفوظة فقط؛ الكتابة لا تتصل بالمواقع ولا تُحدّث الفهارس. فتح نتيجة يستخدم موصلها الأصلي وقد يجلب قائمة فصولها؛ لا يبدأ تنزيل الصور.</p>
     <div class="filters">
         <label>اسم المانجا<input data-testid="shared-search-query" type="search" maxlength="256" value={view.preference.query} disabled={!loaded} oninput={event => change({ query: event.currentTarget.value })} placeholder="One Piece أو عنوان عربي" /></label>
@@ -69,7 +85,7 @@
                         {#if group.metadata.coverage.state !== 'complete'}<p class="warning">تغطية غير مؤكدة: {group.metadata.coverage.state}</p>{/if}
                         <p>دليل التغطية: {group.metadata.coverage.evidence} — هذا لا يثبت سلامة الصور أو اكتمال الفصول.</p>
                     </header>
-                    {#each group.rows as row (JSON.stringify([row.siteId, row.mangaId]))}<Result {row} disabled={opening} onopen={open} />{/each}
+                    {#each group.rows as row (JSON.stringify([row.siteId, row.mangaId]))}<Result {row} disabled={opening} onopen={open} queueSupported={QueueSupported()} selected={!!queueView.flags[QueueIdentity(row)]} queued={!!queueView.queued[QueueIdentity(row)]} onselect={(item, selected) => queueAction(() => queue.Select(reference(item), selected))} onadd={item => queueAction(() => queue.Add(reference(item)))} />{/each}
                     {#if !group.rows.length}<small>نتائج هذا المصدر في صفحات أخرى.</small>{/if}
                 </section>
             {/each}

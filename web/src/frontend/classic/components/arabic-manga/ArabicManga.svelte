@@ -5,12 +5,13 @@
     import { Store as UI } from '../../stores/Stores.svelte';
     import { GetSiteIndexController, ArabicCatalogSources, IndexStateLabel, IndexJobStateLabel, IndexErrorLabel } from '../../../../engine/catalog/SiteIndexController';
     import SharedSearch from './SharedSearch.svelte';
+    import PersonalQueue from './PersonalQueue.svelte';
     import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
     import PluginOrder from './PluginOrder.svelte';
 
     let heading: HTMLHeadingElement;
     let sectionChanged = false;
-    async function chooseSection(section: 'sites' | 'search') { sectionChanged = true; UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
+    async function chooseSection(section: 'sites' | 'search' | 'selections' | 'queue') { sectionChanged = true; UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
     const indexer = GetSiteIndexController();
     const searcher = GetLocalSearchController();
     let index = $state(indexer.State.Value);
@@ -52,10 +53,13 @@
         <button type="button" aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>المواقع</button>
         <button type="button" aria-current={UI.hubSection === 'search' ? 'page' : undefined} onclick={() => chooseSection('search')}>البحث المشترك</button>
         <span>المكتبة — غير متاحة بعد</span>
-        <span>التنزيلات الانتقائية — غير متاحة بعد</span>
+        <button type="button" aria-current={UI.hubSection === 'selections' ? 'page' : undefined} onclick={() => chooseSection('selections')}>الاختيارات</button>
+        <button type="button" aria-current={UI.hubSection === 'queue' ? 'page' : undefined} onclick={() => chooseSection('queue')}>Download Queue</button>
     </nav>
     {#if UI.hubSection === 'search'}
         <SharedSearch />
+    {:else if UI.hubSection === 'selections' || UI.hubSection === 'queue'}
+        {#key UI.hubSection}<PersonalQueue selections={UI.hubSection === 'selections'} />{/key}
     {:else}
     <p class="intro">اختر موقعًا لفتح قائمته وبحثه الأصلي في Media List. فتح المركز أو اختيار موقع لا يحدّث الفهارس ولا يبدأ تنزيلًا.</p>
     <section class="index-controls" aria-label="تحديث فهارس المواقع" data-testid="catalog-controls">

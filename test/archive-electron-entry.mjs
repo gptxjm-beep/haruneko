@@ -66,12 +66,15 @@ try {
     for (const check of hubChecks) assert.equal(check.passed, true, check.name);
     const searchChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SHARED_SEARCH_TEST_SCRIPT, 'utf8'));
     for (const check of searchChecks) assert.equal(check.passed, true, check.name);
+    const queueChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SELECTIVE_QUEUE_TEST_SCRIPT, 'utf8'));
+    for (const check of queueChecks) assert.equal(check.passed, true, check.name);
     const indexChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_TEST_SCRIPT, 'utf8'));
     for (const check of indexChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
     for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
     if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
     const fixture = await window.webContents.executeJavaScript('globalThis.archiveUIFixture');
+    const queueFixture = await window.webContents.executeJavaScript('globalThis.selectiveQueueFixture');
     const beforeReload = await window.webContents.executeJavaScript(`(async () => {
         const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
         const progress = await client.Request({ operation: 'ui-progress', sessionId: '${fixture.id}' });
@@ -92,6 +95,14 @@ try {
         await new SettingsManager(new StorageControllerBrowser()).OpenScope('frontend.classic').Initialize(setting);
         return setting.Value;
     })()`);
+    const queueRecovery = await window.webContents.executeJavaScript(`(async () => {
+        const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
+        return { summary: await client.Request({ operation: 'queue-summary' }), selected: await client.Request({ operation: 'queue-selections' }), rows: await client.Request({ operation: 'queue-list' }) };
+    })()`);
+    assert.equal(queueRecovery.summary.state, 'Cancelled', 'Restoring the queue never automatically starts it');
+    assert.equal(queueRecovery.summary.chaptersStarted, queueFixture.chaptersStarted, 'Queue attempt budgets survive renderer replacement');
+    assert.equal(queueRecovery.selected.length, queueFixture.selected, 'Personal selections survive renderer replacement');
+    assert.equal(queueRecovery.rows.length, queueFixture.queued, 'Personal queue order and references survive renderer replacement');
     const indexRecovery = await window.webContents.executeJavaScript(`(async () => {
         const { SiteIndexRepository } = await import('/src/engine/catalog/SiteIndexRepository.ts');
         const { SiteIndexManager } = await import('/src/engine/catalog/SiteIndexManager.ts');
@@ -138,7 +149,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + searchChecks.length + priorityChecks.length + 16} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + searchChecks.length + queueChecks.length + priorityChecks.length + 20} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);
