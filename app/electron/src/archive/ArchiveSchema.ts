@@ -1,6 +1,18 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 7;
+export const ArchiveSchemaVersion = 8;
+
+// Fixed historical values only: do not match substrings in independently supplied ordering evidence.
+const legacyOrder = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
+const legacyEvidenceSQL = [legacyOrder, ...['ascending', 'descending', 'unknown'].map(order => `Original ${order}; normalized oldest-first once. ${legacyOrder}`)]
+    .map(evidence => `'${evidence}'`).join(', ');
+
+// A started chapter's registration used this generic label and lost the original proof. Revoke it only
+// when its own manga's persisted manifest proves that the historical blanket assumption was used.
+const unverifiedChapterSQL = `(sc.order_evidence IN (${legacyEvidenceSQL}) OR (
+    sc.order_evidence='Saved oldest-first connector manifest; no title-number inference' AND EXISTS (
+      SELECT 1 FROM chapters c JOIN archive_manifests m ON m.session_id=sc.session_id AND m.manga_id=c.manga_id
+      WHERE c.key=sc.chapter_key AND m.order_evidence IN (${legacyEvidenceSQL}))))`;
 
 const migrations = [
     `
@@ -85,6 +97,20 @@ const migrations = [
      INSERT INTO archive_events(session_id,manga_id,kind,reason,created_at)
        SELECT DISTINCT session_id,manga_id,'ordering-review','Legacy blanket direction assumption revoked; files and budgets preserved',CAST(strftime('%s','now') AS INTEGER)*1000
        FROM archive_work WHERE reason LIKE 'legacy-order-unverified: explicit ordering review required%';`,
+    // v7 is retained unchanged: deployed databases must receive the correction through a new migration.
+    `UPDATE archive_work SET state='review',reason=CASE
+         WHEN instr(reason,'legacy-order-unverified: explicit ordering review required')=1 THEN reason
+         ELSE 'legacy-order-unverified: explicit ordering review required'
+           || CASE WHEN reason='' THEN '' ELSE '; previous: ' || reason END END
+       WHERE EXISTS (SELECT 1 FROM session_chapters sc WHERE sc.session_id=archive_work.session_id
+         AND sc.chapter_key=archive_work.chapter_key AND ${unverifiedChapterSQL});
+     UPDATE session_chapters AS sc SET order_confidence='unknown' WHERE ${unverifiedChapterSQL};
+     UPDATE archive_manifests SET ordering='unknown' WHERE order_evidence IN (${legacyEvidenceSQL});
+     INSERT INTO archive_events(session_id,manga_id,kind,reason,created_at)
+       SELECT DISTINCT w.session_id,w.manga_id,'ordering-review-v8',
+         'Historical order evidence revoked, including Manager normalization prefix; files and budgets preserved',CAST(strftime('%s','now') AS INTEGER)*1000
+       FROM archive_work w JOIN session_chapters sc ON sc.session_id=w.session_id AND sc.chapter_key=w.chapter_key
+       WHERE ${unverifiedChapterSQL};`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

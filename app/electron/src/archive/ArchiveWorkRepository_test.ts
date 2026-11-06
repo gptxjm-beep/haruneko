@@ -17,6 +17,74 @@ function fixture(version?: number) {
 }
 
 describe('Persistent archive work queue', () => {
+    it.each([
+        ['MangaScraper.FetchChapters guarantees newest-first after connector decorators', true],
+        ['Original descending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators', true],
+        ['Original ascending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators', true],
+        ['Original unknown; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators', true],
+        ['Original descending; normalized oldest-first once. Independently audited API sequence', false],
+        ['Saved oldest-first connector manifest; no title-number inference', false],
+        ['Independent API order proof; historical quote: MangaScraper.FetchChapters guarantees newest-first after connector decorators', false],
+        ['Original descending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators; replaced by independent API proof', false],
+    ])('Should correct v7 using exact historical evidence only: %s', (evidence, affected) => {
+        const f = fixture(7);
+        try {
+            const command = (input: Record<string, unknown>) => f.repository.Execute({ sessionId: 'session', ...input } as ArchiveCoordinatorCommand);
+            command({ operation: 'archive-catalog-page', items: [{ id: 'm', title: 'M' }] });
+            command({ operation: 'archive-manga-begin', mangaId: 'm' });
+            command({ operation: 'archive-manga-list', mangaId: 'm', chapters: [{ id: 'c', title: 'C', position: 0, language: 'ar' }], order: 'ascending', orderEvidence: evidence, evidence: { state: 'unknown', evidence: '' } });
+            f.database.exec("UPDATE archive_work SET reason='Prior fetch failure',attempts=1; UPDATE archive_runs SET chapters_started=2");
+            MigrateArchiveDatabase(f.database);
+            expect(f.database.prepare('PRAGMA user_version').get()!.user_version).toBe(8);
+            expect(f.database.prepare('SELECT state,reason,attempts FROM archive_work').get()).toMatchObject({ state: affected ? 'review' : 'pending',
+                reason: affected ? 'legacy-order-unverified: explicit ordering review required; previous: Prior fetch failure' : 'Prior fetch failure', attempts: 1 });
+            expect(f.database.prepare('SELECT order_confidence,order_evidence FROM session_chapters').get()).toMatchObject({ order_confidence: affected ? 'unknown' : 'connector-contract', order_evidence: evidence });
+            expect(f.database.prepare('SELECT ordering FROM archive_manifests').get()!.ordering).toBe(affected ? 'unknown' : 'ascending');
+            expect(f.repository.Snapshot('session').chaptersStarted).toBe(2);
+            MigrateArchiveDatabase(f.database);
+            expect(f.database.prepare("SELECT count(*) AS n FROM archive_events WHERE kind='ordering-review-v8'").get()!.n).toBe(affected ? 1 : 0);
+        } finally { f.database.close(); }
+    });
+
+    it('Should keep an interrupted historical manifest untrusted when its remaining batch is published after v8', () => {
+        const f = fixture(7);
+        try {
+            const command = (input: Record<string, unknown>) => f.repository.Execute({ sessionId: 'session', ...input } as ArchiveCoordinatorCommand);
+            command({ operation: 'archive-catalog-page', items: [{ id: 'm', title: 'M' }] });
+            command({ operation: 'archive-manga-begin', mangaId: 'm' });
+            const token = command({ operation: 'archive-manifest-begin', mangaId: 'm', count: 2, order: 'ascending',
+                orderEvidence: 'Original descending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators', evidence: { state: 'unknown', evidence: '' } });
+            command({ operation: 'archive-manifest-batch', mangaId: 'm', manifestId: token, offset: 0, chapters: [{ id: 'a', title: 'A', position: 0, language: 'ar' }] });
+            MigrateArchiveDatabase(f.database);
+            expect(f.database.prepare('SELECT received_count,state,ordering FROM archive_manifests').get()).toMatchObject({ received_count: 1, state: 'registering', ordering: 'unknown' });
+            expect(command({ operation: 'archive-next-chapter', mangaId: 'm', now: Date.now() })).toBeNull();
+            command({ operation: 'archive-manifest-batch', mangaId: 'm', manifestId: token, offset: 1, chapters: [{ id: 'b', title: 'B', position: 1, language: 'ar' }] });
+            command({ operation: 'archive-manifest-end', mangaId: 'm', manifestId: token });
+            expect(f.database.prepare('SELECT state FROM archive_work ORDER BY id').all()).toEqual([{ state: 'review' }, { state: 'review' }]);
+            expect(command({ operation: 'archive-next-chapter', mangaId: 'm', now: Date.now() })).toBeNull();
+        } finally { f.database.close(); }
+    });
+
+    it('Should roll back all v8 corrections when a confidence update fails', () => {
+        const f = fixture(7);
+        try {
+            const command = (input: Record<string, unknown>) => f.repository.Execute({ sessionId: 'session', ...input } as ArchiveCoordinatorCommand);
+            command({ operation: 'archive-catalog-page', items: [{ id: 'm', title: 'M' }] });
+            command({ operation: 'archive-manga-begin', mangaId: 'm' });
+            command({ operation: 'archive-manga-list', mangaId: 'm', chapters: [{ id: 'c', title: 'C', position: 0, language: 'ar' }], order: 'ascending',
+                orderEvidence: 'Original descending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators', evidence: { state: 'unknown', evidence: '' } });
+            const snapshot = () => ['archive_work', 'session_chapters', 'archive_manifests', 'archive_runs', 'archive_events'].map(table => f.database.prepare(`SELECT * FROM ${table}`).all());
+            const before = snapshot();
+            f.database.exec("CREATE TRIGGER reject_confidence BEFORE UPDATE ON session_chapters BEGIN SELECT RAISE(ABORT,'confidence failure'); END");
+            expect(() => MigrateArchiveDatabase(f.database)).toThrow('confidence failure');
+            expect(f.database.prepare('PRAGMA user_version').get()!.user_version).toBe(7);
+            expect(snapshot()).toEqual(before);
+            f.database.exec('DROP TRIGGER reject_confidence');
+            MigrateArchiveDatabase(f.database);
+            expect(f.database.prepare('SELECT state FROM archive_work').get()!.state).toBe('review');
+        } finally { f.database.close(); }
+    });
+
     it('Should quarantine legacy assumed ordering without losing identities, budgets or local receipts', () => {
         const f = fixture(6);
         try {
@@ -90,7 +158,7 @@ describe('Persistent archive work queue', () => {
             expect(database.prepare("SELECT name FROM sqlite_master WHERE name='archive_runs'").get()).toBeUndefined();
             database.exec('DROP TABLE archive_work');
             MigrateArchiveDatabase(database);
-            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(7);
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(8);
         } finally { database.close(); }
     });
 

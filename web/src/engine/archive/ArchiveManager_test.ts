@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import * as ArchiveSchema from '../../../../app/electron/src/archive/ArchiveSchema';
 import { ArchiveRepository } from '../../../../app/electron/src/archive/ArchiveRepository';
 import { ArchiveFiles } from '../../../../app/electron/src/archive/ArchiveFiles';
 import type { ArchiveCoordinatorCommand, ArchivePolicy } from '../../../../app/electron/src/archive/ArchiveCoordinatorProtocol';
@@ -21,12 +22,16 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
 const complete = { state: 'complete' as const, evidence: 'Isolated fixture manifest, all pages visited' };
 
-async function fixture(catalog = [{ id: 'manga', title: 'Manga' }]) {
+async function fixture(catalog = [{ id: 'manga', title: 'Manga' }], schemaVersion?: number) {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), 'haruneko-manager-'));
     const root = path.join(base, 'output');
     await fs.mkdir(root);
     const filename = path.join(base, 'profile', 'state.sqlite');
-    let repository = new ArchiveRepository(filename);
+    // Reproduce the old application's schema through the real constructor, without editing persisted evidence or PRAGMA.
+    const migrate = ArchiveSchema.MigrateArchiveDatabase;
+    const migration = schemaVersion === undefined ? undefined : vi.spyOn(ArchiveSchema, 'MigrateArchiveDatabase').mockImplementationOnce(database => migrate(database, schemaVersion));
+    let repository: ArchiveRepository;
+    try { repository = new ArchiveRepository(filename); } finally { migration?.mockRestore(); }
     let files = new ArchiveFiles(repository);
     const grant = repository.GrantRoot(root);
     const session = repository.CreateSession(grant.rootId, 'site', 'Site', { format: 'application/x-cbz', useWebsiteSubDirectory: false });
@@ -269,26 +274,61 @@ describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
         expect(f.calls.length).toBe(2);
     });
 
-    it('Should quarantine legacy direction on reopen while preserving real saved files, receipts and budgets', async () => {
-        const f = await fixture();
+    it.each([6, 7])('Should quarantine real Manager evidence from v%s without changing saved files, identities, receipts or budgets', async version => {
+        const f = await fixture(undefined, 6);
+        f.manifests.get('manga')!.orderEvidence = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
         const manager = f.manager();
         f.setBeforeDownload(async () => { void manager.Pause(); });
         await manager.Start();
         const database = f.Repository['database'];
-        database.exec("UPDATE session_chapters SET order_evidence='MangaScraper.FetchChapters guarantees newest-first after connector decorators'; PRAGMA user_version=6");
-        const receipts = database.prepare('SELECT * FROM files').all();
-        const attempts = database.prepare('SELECT * FROM attempts').all();
-        expect(receipts).toHaveLength(1);
+        const evidence = 'Original descending; normalized oldest-first once. MangaScraper.FetchChapters guarantees newest-first after connector decorators';
+        expect(database.prepare('SELECT order_evidence FROM session_chapters ORDER BY position').all()).toEqual([
+            { order_evidence: 'Saved oldest-first connector manifest; no title-number inference' }, { order_evidence: evidence },
+        ]);
+        expect(database.prepare('SELECT order_evidence FROM archive_manifests').get()!.order_evidence).toBe(evidence);
+        if (version === 7) ArchiveSchema.MigrateArchiveDatabase(database, 7);
+        expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(version);
+        expect(database.prepare("SELECT count(*) AS n FROM archive_work WHERE state='pending'").get()!.n).toBe(1);
+        const preserved = ['files', 'attempt_files', 'attempts', 'chapters', 'errors', 'conflicts'].map(table => ({ table, rows: database.prepare(`SELECT * FROM ${table}`).all() }));
+        const chapters = database.prepare('SELECT * FROM session_chapters').all();
+        const work = database.prepare('SELECT id,chapter_key,position,attempts FROM archive_work ORDER BY id').all();
+        const budgets = database.prepare('SELECT mangas_used,chapters_started,catalog_attempts FROM archive_runs').get();
+        expect(preserved[0].rows).toHaveLength(1);
         const bytes = await fs.readFile(path.join(f.root, 'manga', 'old.cbz'));
+        // Inspect the migration before startup recovery legitimately changes Verifying to Interrupted.
+        ArchiveSchema.MigrateArchiveDatabase(database);
+        const upgraded = database;
+        expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(8);
+        expect(upgraded.prepare('SELECT DISTINCT state FROM archive_work').all()).toEqual([{ state: 'review' }]);
+        expect(upgraded.prepare('SELECT ordering,order_evidence FROM archive_manifests').get()).toMatchObject({ ordering: 'unknown', order_evidence: evidence });
+        expect(upgraded.prepare('SELECT * FROM session_chapters').all()).toEqual(chapters.map(row => ({ ...row, order_confidence: 'unknown' })));
+        for (const { table, rows } of preserved) expect(upgraded.prepare(`SELECT * FROM ${table}`).all()).toEqual(rows);
+        expect(upgraded.prepare('SELECT id,chapter_key,position,attempts FROM archive_work ORDER BY id').all()).toEqual(work);
+        expect(upgraded.prepare('SELECT mangas_used,chapters_started,catalog_attempts FROM archive_runs').get()).toEqual(budgets);
         await f.reopen();
         f.setBeforeDownload(undefined);
         const resumed = await f.manager().Resume();
         expect(resumed.state).toBe('review');
+        expect(resumed.counts.review).toBe(2);
         expect(resumed.chaptersStarted).toBe(1);
         expect(f.calls).toEqual(['manga/old']);
-        expect(f.Repository['database'].prepare('SELECT * FROM files').all()).toEqual(receipts);
-        expect(f.Repository['database'].prepare('SELECT * FROM attempts').all()).toEqual(attempts);
         expect(await fs.readFile(path.join(f.root, 'manga', 'old.cbz'))).toEqual(bytes);
+        expect(f.Repository['database'].prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok');
+    });
+
+    it('Should preserve an independent chapter proof even alongside a historical manifest when upgrading v7', async () => {
+        const f = await fixture(undefined, 7);
+        f.manifests.get('manga')!.orderEvidence = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
+        const manager = f.manager();
+        f.setBeforeDownload(async () => { void manager.Pause(); });
+        await manager.Start();
+        f.Repository.RegisterChapter(f.session, { siteId: 'site', mangaId: 'manga', chapterId: 'new', title: 'Special', position: 1,
+            orderConfidence: 'verified-ascending', orderEvidence: 'Independent structured API position audit' });
+        await f.reopen();
+        expect(f.Repository['database'].prepare("SELECT order_confidence,order_evidence FROM session_chapters sc JOIN chapters c ON c.key=sc.chapter_key WHERE c.chapter_id='new'").get())
+            .toMatchObject({ order_confidence: 'verified-ascending', order_evidence: 'Independent structured API position audit' });
+        expect(f.Repository['database'].prepare("SELECT state FROM archive_work WHERE id='new'").get()!.state).toBe('pending');
+        expect(f.Repository['database'].prepare("SELECT state FROM archive_work WHERE id='old'").get()!.state).toBe('review');
     });
 
     it('Should continue after one inaccessible chapter, with bounded delayed retries', async () => {
