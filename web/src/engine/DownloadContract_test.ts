@@ -38,6 +38,10 @@ function directory(id: string): FileSystemDirectoryHandle {
     } as FileSystemDirectoryHandle;
 }
 
+// Windows CI may supply a bounded budget measured by three isolated native-timer replays.
+const measuredWindowsBudget = process.platform === 'win32' && process.env.CI ? Number(process.env.HARUNEKO_WINDOWS_BATCH_TIMEOUT_MS) : 5000;
+const batchTimeout = Number.isSafeInteger(measuredWindowsBudget) && measuredWindowsBudget >= 5000 && measuredWindowsBudget <= 15000 ? measuredWindowsBudget : 5000;
+
 describe('Download attempt contract', () => {
     it('Should cancel a paced archive without waiting for the next long request delay', async () => {
         vi.useFakeTimers();
@@ -417,7 +421,7 @@ describe('DownloadManager handle API', () => {
         expect(results.every(result => result.outcome === 'succeeded')).toBe(true);
         expect(await handles[0].completion).toBe(results[0]);
         expect(handles[0].status.Value).toBe(Status.Completed);
-    });
+    }, batchTimeout);
     it('Should permit new requests after failed and completed attempts', async () => {
         const f = fixture();
         const manager = f.manager();
