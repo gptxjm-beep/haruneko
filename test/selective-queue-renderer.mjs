@@ -59,9 +59,12 @@
     let rows = await queue.List(); await queue.Edit(rows[2].seq, 'up'); rows = await queue.List();
     record('Queue priority can change without changing stable manga identities', rows.map(row => row.mangaId).join(',') === 'berserk,bleach,one');
     await queue.Edit(rows[0].seq, 'up', { mode: 'range', from: 1, to: 1 });
+    const oldReference = { siteId: a.Identifier, mangaId: 'readded-later', title: 'Old removed queue identity', siteName: a.Title };
+    await queue.Add(oldReference); const oldRow = (await queue.List()).find(row => row.mangaId === oldReference.mangaId); await queue.Edit(oldRow.seq, 'remove');
     for (const [mangaId, title] of [['unknown', 'Unknown Order Queue'], ['bad', 'Invalid Image Queue'], ['extra', 'Over Budget Queue']]) await queue.Add({ siteId: a.Identifier, mangaId, title, siteName: a.Title });
     const grant = await client.Request({ operation: 'choose-root' }), defaults = await client.Request({ operation: 'ui-preferences' });
     await click('Start Downloads / Resume…'); await wait(() => document.querySelector('[data-testid="queue-setup"]'));
+    record('The actual queue UI accurately explains equivalent All and Missing and the SQLite downgrade restriction', document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All وMissing يستخدمان القائمة نفسها') && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10'));
     record('Start requires an explicit setup confirmation and exposes the frozen development limits', [...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled && document.querySelector('[data-testid="queue-budget"]').textContent.includes('/20'));
     // Edit only this queue's setup. General archiving and manual download defaults must remain untouched.
     for (const [label, value] of [['Delay between requests', '100'], ['Retry delay', '1000'], ['Maximum attempts', '1'], ['Languages', 'ar']]) {
@@ -73,7 +76,12 @@
     await tick();
     // The form contains other checkboxes; select the explicit confirmation by its label.
     const explicit = [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('أؤكد')).querySelector('input'); explicit.click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
-    await wait(() => images === 1); await click('Pause'); release(); gate = Promise.resolve();
+    await wait(() => images === 1);
+    const confirmedBatch = (await client.Request({ operation: 'queue-summary' })).batchId;
+    await queue.Add({ siteId: a.Identifier, mangaId: 'late-addition', title: 'Added during first download', siteName: a.Title });
+    await queue.Add(oldReference);
+    record('New and old readded identities remain outside the confirmed batch while its first image is downloading', (await client.Request({ operation: 'queue-summary' })).waitingNextRun === 2 && (await queue.List()).filter(row => ['late-addition', 'readded-later'].includes(row.mangaId)).every(row => !row.inCurrentRun && !row.sessionId));
+    await click('Pause'); release(); gate = Promise.resolve();
     await wait(async () => (await client.Request({ operation: 'queue-summary' })).state === 'Paused' && !runner.Running);
     const paused = await client.Request({ operation: 'queue-summary' });
     record('Pause finishes the owned chapter and persists its receipt and cumulative attempt budget', paused.chaptersStarted === 1 && order[0][0] === 'berserk' && order[0][1] === 'old');
@@ -81,6 +89,7 @@
     [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('أؤكد')).querySelector('input').click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
     await wait(async () => (await client.Request({ operation: 'queue-summary' })).state === 'Limited' && !runner.Running);
     rows = await queue.List(); const summary = await client.Request({ operation: 'queue-summary' });
+    record('Pause and resume retain original run membership and never start late additions or resurrect an old queue identity', summary.batchId === confirmedBatch && summary.waitingNextRun === 2 && rows.filter(row => ['late-addition', 'readded-later'].includes(row.mangaId)).every(row => row.state === 'Queued' && !row.sessionId));
     record('Selective execution uses the original managers and preserves oldest-first chapter order without read-state filtering', rows.slice(0, 3).every(row => row.state === 'Completed') && order.filter(([id]) => id === 'bleach').map(([, chapter]) => chapter).join(',') === 'old,new');
     record('Unknown chapter order remains Review without downloading any of its images', rows.find(row => row.mangaId === 'unknown').state === 'Review' && !order.some(([id]) => id === 'unknown'));
     record('HTML images cannot produce a Completed queue item', rows.find(row => row.mangaId === 'bad').state === 'Review');

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SelectiveArchiveSource } from './SelectiveArchiveSource';
 import type { ArchiveSource, ArchiveChapterManifest } from './ArchiveSource';
 import type { MangaPlugin, Manga } from '../providers/MangaPlugin';
+import { QueueScopeLabels, QueueScopeNotice } from '../../../../app/electron/src/archive/SelectiveQueueContract';
 const site = {} as MangaPlugin, manga = {} as Manga;
 const ref = { siteId: 'site', mangaId: 'manga', title: 'Original', siteName: 'Site' };
 function Source(order: 'ascending' | 'descending' | 'unknown'): ArchiveSource {
@@ -9,6 +10,11 @@ function Source(order: 'ascending' | 'descending' | 'unknown'): ArchiveSource {
         chapters: ['special', '1.5', '0'].map((id, position) => ({ id, title: id, position, language: 'ar' })), order, orderEvidence: 'Fixture source contract', coverage: { state: 'unknown', evidence: 'Fixture' } }) };
 }
 describe('Selective chapter manifest adapter', () => {
+    it('Should document All and legacy Missing as equivalent saved-list scopes, without a new-chapter discovery promise', async () => {
+        const all = await new SelectiveArchiveSource(site, ref, { mode: 'all' }, Source('ascending')).Chapters(manga, new AbortController().signal);
+        const missing = await new SelectiveArchiveSource(site, ref, { mode: 'missing' }, Source('ascending')).Chapters(manga, new AbortController().signal);
+        expect(missing).toEqual(all); expect(QueueScopeLabels.missing).toContain('نفس نطاق All'); expect(QueueScopeNotice).toContain('لا يكتشف');
+    });
     it('Should slice a trusted oldest-first range without guessing numeric or special titles', async () => {
         const source = new SelectiveArchiveSource(site, ref, { mode: 'range', from: 1, to: 2 }, Source('descending'));
         const manifest = await source.Chapters(manga, new AbortController().signal);

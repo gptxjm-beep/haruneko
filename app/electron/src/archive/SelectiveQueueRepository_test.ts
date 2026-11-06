@@ -17,6 +17,47 @@ function Fixture() {
     return { db, queue, reference, preferences, work, ui };
 }
 describe('Persistent selective queue', () => {
+    it('Should freeze confirmed membership and leave a late individual or bulk addition for another Start', () => {
+        const f = Fixture();
+        try {
+            for (const id of ['one', 'two']) f.queue.Execute({ operation: 'queue-add', reference: f.reference(id) });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            const first = f.queue.Execute({ operation: 'queue-next' });
+            f.queue.Execute({ operation: 'queue-select', reference: f.reference('three'), selected: true });
+            f.queue.Execute({ operation: 'queue-add' });
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('three') });
+            f.queue.Execute({ operation: 'queue-result', seq: first.seq, reason: 'Fixture unavailable' });
+            const second = f.queue.Execute({ operation: 'queue-next' }); expect(second.mangaId).toBe('two');
+            f.queue.Execute({ operation: 'queue-result', seq: second.seq, reason: 'Fixture unavailable' });
+            expect(f.queue.Execute({ operation: 'queue-next' })).toBeNull();
+            expect(f.queue.Summary()).toMatchObject({ state: 'Drained', waitingNextRun: 1 });
+            expect(f.queue.Execute({ operation: 'queue-list' }).find((row: QueueManga) => row.mangaId === 'three').sessionId).toBeNull();
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            expect(f.queue.Execute({ operation: 'queue-next' }).mangaId).toBe('three');
+        } finally { f.db.close(); }
+    });
+    it('Should preserve membership on recovery and exclude an old identity removed and readded during a run', () => {
+        const f = Fixture();
+        try {
+            for (const id of ['one', 'two', 'old']) f.queue.Execute({ operation: 'queue-add', reference: f.reference(id) });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            const first = f.queue.Execute({ operation: 'queue-next' });
+            const old = f.queue.Execute({ operation: 'queue-list' }).find((row: QueueManga) => row.mangaId === 'old');
+            f.queue.Execute({ operation: 'queue-edit', seq: old.seq, action: 'remove' });
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('old') });
+            const batch = f.queue.Summary().batchId;
+            f.queue.Recover();
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            expect(f.queue.Summary().batchId).toBe(batch);
+            expect(f.queue.Execute({ operation: 'queue-next' }).sessionId).toBe(first.sessionId);
+            f.queue.Execute({ operation: 'queue-result', seq: first.seq, reason: 'Fixture unavailable' });
+            const second = f.queue.Execute({ operation: 'queue-next' }); expect(second.mangaId).toBe('two');
+            f.queue.Execute({ operation: 'queue-result', seq: second.seq, reason: 'Fixture unavailable' });
+            expect(f.queue.Execute({ operation: 'queue-next' })).toBeNull();
+            const restored = f.queue.Execute({ operation: 'queue-list' }).find((row: QueueManga) => row.mangaId === 'old');
+            expect(restored.seq).toBe(old.seq); expect(restored.sessionId).toBeNull();
+        } finally { f.db.close(); }
+    });
     it('Should retain selection order and source identity independently of search and favorites', () => {
         const f = Fixture();
         try {
@@ -140,7 +181,7 @@ describe('Persistent selective queue', () => {
             expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='hub_selections'").get()).toBeUndefined();
             db.exec('DROP TABLE hub_queue'); MigrateArchiveDatabase(db);
             expect(db.prepare('SELECT mangas_used,chapters_started FROM archive_runs WHERE session_id=?').get('old')).toMatchObject({ mangas_used: 4, chapters_started: 17 });
-            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
         } finally { db.close(); }
     });
     it('Should freeze the reserve between selective tasks even before a child run has started', () => {
@@ -162,5 +203,37 @@ describe('Persistent selective queue', () => {
             f.queue.Execute({ operation: 'queue-stop', state: 'Cancelled', reason: 'User cancelled' });
             expect(f.ui.Save({ ...f.preferences, reserveGiB: 60 }).reserveGiB).toBe(60);
         } finally { f.db.close(); }
+    });
+    it('Should quarantine unprovable v9 running membership and preserve old identities and budgets', () => {
+        const db = new DatabaseSync(':memory:');
+        try {
+            MigrateArchiveDatabase(db, 9);
+            const work = new ArchiveWorkRepository(db), ui = new ArchiveUIRepository(db, work);
+            db.exec("INSERT INTO roots(id,path,label) VALUES('r','/isolated-test','Test')");
+            const preferences = { ...structuredClone(DefaultArchivePreferences), rootId: 'r' };
+            const id = ui.Create('site', 'Site', preferences, true);
+            db.prepare('UPDATE archive_runs SET mangas_used=4,chapters_started=17 WHERE session_id=?').run(id);
+            db.prepare("INSERT INTO hub_queue(site_id,manga_id,title,site_name,priority,state,session_id) VALUES('site','old','Old','Site',1,'Paused',?)").run(id);
+            db.prepare("UPDATE hub_queue_control SET state='Running',preferences=?,current_seq=1").run(JSON.stringify(ui.Validate(preferences)));
+            MigrateArchiveDatabase(db);
+            const queue = new SelectiveQueueRepository(db, ui, work);
+            expect(queue.Summary()).toMatchObject({ state: 'Review', batchId: null, mangasUsed: 4, chaptersStarted: 17 });
+            expect(db.prepare('SELECT count(*) n FROM hub_queue_batch_members').get()!.n).toBe(0);
+            expect(() => queue.Execute({ operation: 'queue-next' })).toThrow('not running');
+            queue.Execute({ operation: 'queue-open', preferences, confirmed: true });
+            expect(queue.Execute({ operation: 'queue-next' }).sessionId).toBe(id);
+            expect(queue.Summary()).toMatchObject({ mangasUsed: 4, chaptersStarted: 17 });
+        } finally { db.close(); }
+    });
+    it('Should roll back v10 membership migration completely on failure without altering v9 queue data', () => {
+        const db = new DatabaseSync(':memory:');
+        try {
+            MigrateArchiveDatabase(db, 9);
+            db.exec("INSERT INTO hub_queue(site_id,manga_id,title,site_name,priority) VALUES('s','m','Preserved','Source',1); CREATE TABLE hub_queue_batches(id TEXT)");
+            expect(() => MigrateArchiveDatabase(db)).toThrow();
+            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+            expect(db.prepare('PRAGMA table_info(hub_queue)').all().some(row => row.name === 'enqueue_version')).toBe(false);
+            expect(db.prepare('SELECT title FROM hub_queue').get()!.title).toBe('Preserved');
+        } finally { db.close(); }
     });
 });

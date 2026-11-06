@@ -31,6 +31,7 @@ export class SelectiveQueueRunner {
         else await this.client.Request({ operation: 'queue-stop', state: 'Cancelled', reason: 'Cancelled by user; files and pending references retained' });
     }
     private async Run(preferences: ArchivePreferences, confirmed: boolean): Promise<void> {
+        // Main freezes a durable membership (or resumes its existing one); this loop never grows that set.
         await this.client.Request({ operation: 'queue-open', preferences, confirmed });
         try {
             while (!this.requested) {

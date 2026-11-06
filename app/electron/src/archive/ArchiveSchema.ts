@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 9;
+export const ArchiveSchemaVersion = 10;
 
 // Fixed historical values only: do not match substrings in independently supplied ordering evidence.
 const legacyOrder = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
@@ -122,6 +122,16 @@ const migrations = [
      CREATE TABLE hub_queue_control(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL DEFAULT 'Paused',
        reason TEXT NOT NULL DEFAULT '',preferences TEXT,current_seq INTEGER REFERENCES hub_queue(seq));
      INSERT INTO hub_queue_control(id) VALUES(1);`,
+    // v10: explicit, durable consent membership. Never infer a pre-v10 active run from today's queue.
+    `ALTER TABLE hub_queue ADD COLUMN enqueue_version INTEGER NOT NULL DEFAULT 1;
+     ALTER TABLE hub_queue_control ADD COLUMN batch_id TEXT;
+     CREATE TABLE hub_queue_batches(id TEXT PRIMARY KEY,confirmed_at INTEGER NOT NULL);
+     CREATE TABLE hub_queue_batch_members(batch_id TEXT NOT NULL REFERENCES hub_queue_batches(id),
+       queue_seq INTEGER NOT NULL REFERENCES hub_queue(seq),enqueue_version INTEGER NOT NULL,
+       PRIMARY KEY(batch_id,queue_seq));
+     UPDATE hub_queue_control SET state='Review',current_seq=NULL,
+       reason='Legacy run membership is unproven; explicit confirmation of a new run is required'
+       WHERE preferences IS NOT NULL AND state IN ('Running','Paused','Interrupted','Limited','Failed');`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

@@ -36,7 +36,8 @@ export class SelectiveQueueRepository {
             if (snapshot.state === 'running' && snapshot.counts.downloading) state = 'Downloading';
         }
         return { seq: Number(row.seq), siteId: String(row.site_id), mangaId: String(row.manga_id), title: String(row.title), siteName: String(row.site_name),
-            state, reason: ArchivePublicMessage(row.reason), sessionId: row.session_id as string | null, scope: JSON.parse(String(row.scope ?? '{"mode":"all"}')), progress };
+            state, reason: ArchivePublicMessage(row.reason), sessionId: row.session_id as string | null, scope: JSON.parse(String(row.scope ?? '{"mode":"all"}')), progress,
+            inCurrentRun: !!this.db.prepare('SELECT 1 FROM hub_queue_batch_members m JOIN hub_queue_control c ON c.batch_id=m.batch_id WHERE m.queue_seq=? AND m.enqueue_version=?').get(row.seq, row.enqueue_version ?? 1) };
     }
     private Control() { return this.db.prepare('SELECT * FROM hub_queue_control WHERE id=1').get()!; }
     public Budget(): { mangasUsed: number; chaptersStarted: number } {
@@ -48,7 +49,8 @@ export class SelectiveQueueRepository {
         const preferences = control.preferences ? JSON.parse(String(control.preferences)) : null;
         return { ...this.Budget(), selected: Number(this.db.prepare('SELECT count(*) n FROM hub_selections').get()!.n),
             queued: Number(this.db.prepare('SELECT count(*) n FROM hub_queue WHERE removed=0').get()!.n), state: String(control.state), reason: ArchivePublicMessage(control.reason),
-            preferences, rootLabel: this.ui.RootLabel(preferences?.rootId ?? null) };
+            preferences, rootLabel: this.ui.RootLabel(preferences?.rootId ?? null), batchId: control.batch_id ? String(control.batch_id) : null,
+            waitingNextRun: Number(this.db.prepare("SELECT count(*) n FROM hub_queue q WHERE removed=0 AND state IN ('Queued','Paused') AND NOT EXISTS (SELECT 1 FROM hub_queue_batch_members m WHERE m.batch_id=? AND m.queue_seq=q.seq AND m.enqueue_version=q.enqueue_version)").get(control.batch_id ?? null)!.n) };
     }
     /** Called inside startup recovery. Neither deletion nor renderer reload can reset cumulative counters. */
     public Recover(): void {
@@ -75,22 +77,29 @@ export class SelectiveQueueRepository {
                 const preferences = this.ui.Validate(command.preferences);
                 if (!preferences.rootId || preferences.reserveGiB !== this.ui.Preferences().reserveGiB) throw new Error('Choose a native folder and save reserve settings first');
                 if (control.preferences && JSON.stringify(preferences) !== control.preferences) throw new Error('Selective queue destination and policy are frozen; budgets cannot be reset');
-                this.db.prepare("UPDATE hub_queue_control SET state='Running',reason='',preferences=coalesce(preferences,?),current_seq=NULL WHERE id=1").run(JSON.stringify(preferences));
+                let batchId = control.batch_id;
+                if (!batchId || ['Drained', 'Cancelled'].includes(String(control.state))) {
+                    batchId = randomUUID();
+                    this.db.prepare('INSERT INTO hub_queue_batches(id,confirmed_at) VALUES(?,?)').run(batchId, Date.now());
+                    this.db.prepare("INSERT INTO hub_queue_batch_members(batch_id,queue_seq,enqueue_version) SELECT ?,seq,enqueue_version FROM hub_queue WHERE removed=0 AND state IN ('Queued','Paused')").run(batchId);
+                }
+                this.db.prepare("UPDATE hub_queue_control SET state='Running',reason='',preferences=coalesce(preferences,?),current_seq=NULL,batch_id=? WHERE id=1").run(JSON.stringify(preferences), batchId);
                 return this.Summary();
             }
             if (command.operation === 'queue-next') {
                 const control = this.Control();
                 if (control.state !== 'Running') throw new Error('Queue is not running');
+                if (!control.batch_id) throw new Error('Confirmed run membership is unavailable; review required');
                 if (control.current_seq) return this.Row(this.db.prepare('SELECT * FROM hub_queue WHERE seq=?').get(control.current_seq)!);
                 const preferences = JSON.parse(String(control.preferences));
                 const budget = this.Budget();
                 // Already admitted tasks may reconcile their saved outputs at the cap. No new identities are admitted.
-                const candidates = this.db.prepare("SELECT q.*,coalesce(r.mangas_used,0) admitted FROM hub_queue q LEFT JOIN archive_runs r ON r.session_id=q.session_id WHERE q.removed=0 AND q.state IN ('Queued','Paused') ORDER BY priority,q.seq").iterate();
+                const candidates = this.db.prepare("SELECT q.*,coalesce(r.mangas_used,0) admitted FROM hub_queue q JOIN hub_queue_batch_members m ON m.batch_id=? AND m.queue_seq=q.seq AND m.enqueue_version=q.enqueue_version LEFT JOIN archive_runs r ON r.session_id=q.session_id WHERE q.removed=0 AND q.state IN ('Queued','Paused') ORDER BY priority,q.seq").iterate(control.batch_id);
                 let chosen: Record<string, any> | undefined;
                 for (const row of candidates) { if (row.admitted || budget.mangasUsed < preferences.policy.maxMangas && budget.chaptersStarted < preferences.policy.maxChapters) { chosen = row; break; } }
                 if (!chosen) {
-                    const pending = this.db.prepare("SELECT 1 FROM hub_queue WHERE removed=0 AND state IN ('Queued','Paused') LIMIT 1").get();
-                    this.db.prepare('UPDATE hub_queue_control SET state=?,reason=? WHERE id=1').run(pending ? 'Limited' : 'Drained', pending ? 'Cumulative development budget reached: 5 manga and 20 chapter attempts; remaining entries retained' : 'Requested queue work drained; source completeness remains independent');
+                    const pending = this.db.prepare("SELECT 1 FROM hub_queue q JOIN hub_queue_batch_members m ON m.batch_id=? AND m.queue_seq=q.seq AND m.enqueue_version=q.enqueue_version WHERE q.removed=0 AND q.state IN ('Queued','Paused') LIMIT 1").get(control.batch_id);
+                    this.db.prepare('UPDATE hub_queue_control SET state=?,reason=? WHERE id=1').run(pending ? 'Limited' : 'Drained', pending ? 'Cumulative development budget reached: 5 manga and 20 chapter attempts; remaining entries retained' : 'Confirmed run drained; later additions require another explicit Start; source completeness remains independent');
                     return null;
                 }
                 const sessionId = chosen.session_id ?? randomUUID();
@@ -146,7 +155,7 @@ export class SelectiveQueueRepository {
                     const ref = this.Reference(input as unknown as MangaReference);
                     const old = this.db.prepare('SELECT seq,removed FROM hub_queue WHERE site_id=? AND manga_id=?').get(ref.siteId, ref.mangaId);
                     if (old) {
-                        if (old.removed) { this.db.prepare('UPDATE hub_queue SET removed=0,priority=? WHERE seq=?').run(++priority, old.seq); added++; }
+                        if (old.removed) { this.db.prepare('UPDATE hub_queue SET removed=0,priority=?,enqueue_version=enqueue_version+1 WHERE seq=?').run(++priority, old.seq); added++; }
                         else existing++;
                     } else { this.db.prepare('INSERT INTO hub_queue(site_id,manga_id,title,site_name,priority) VALUES(?,?,?,?,?)').run(ref.siteId, ref.mangaId, ref.title, ref.siteName, ++priority); added++; }
                 }
@@ -154,7 +163,10 @@ export class SelectiveQueueRepository {
             }
             if (command.operation === 'queue-edit') {
                 const row = this.db.prepare('SELECT * FROM hub_queue WHERE seq=? AND removed=0').get(Count(command.seq, 'queue identity', Number.MAX_SAFE_INTEGER));
-                if (!row || this.Control().state === 'Running') throw new Error('Pause the queue before editing');
+                const control = this.Control();
+                const runningRemoval = command.action === 'remove' && !command.scope && row && row.seq !== control.current_seq
+                    && !['Preparing', 'Downloading'].includes(String(row.state));
+                if (!row || control.state === 'Running' && !runningRemoval) throw new Error('Pause the queue before editing its active task or ordering');
                 if (command.scope) {
                     if (row.session_id) throw new Error('Scope is frozen after task preparation; existing receipts preserved');
                     this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify(ValidateQueueScope(command.scope)), row.seq); return;

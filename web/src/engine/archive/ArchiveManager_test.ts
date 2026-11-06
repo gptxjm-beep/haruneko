@@ -298,7 +298,7 @@ describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
         // Inspect the migration before startup recovery legitimately changes Verifying to Interrupted.
         ArchiveSchema.MigrateArchiveDatabase(database);
         const upgraded = database;
-        expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+        expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
         expect(upgraded.prepare('SELECT DISTINCT state FROM archive_work').all()).toEqual([{ state: 'review' }]);
         expect(upgraded.prepare('SELECT ordering,order_evidence FROM archive_manifests').get()).toMatchObject({ ordering: 'unknown', order_evidence: evidence });
         expect(upgraded.prepare('SELECT * FROM session_chapters').all()).toEqual(chapters.map(row => ({ ...row, order_confidence: 'unknown' })));

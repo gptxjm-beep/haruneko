@@ -56,6 +56,7 @@ if (process.argv[2] === 'crash-child') {
             const preferences = { ...repository.UI.Preferences(), rootId: repository.Session(session).root_id };
             repository.Queue.Execute({ operation: 'queue-open', preferences, confirmed: true });
             const item = repository.Queue.Execute({ operation: 'queue-next' });
+            repository.Queue.Execute({ operation: 'queue-add', reference: { ...reference, mangaId: 'late-after-confirmation', title: 'Later queue addition' } });
             if (phase === 'queue-verified') {
                 const sessionId = item.sessionId, mangaId = item.mangaId;
                 repository.Work.Execute({ operation: 'archive-run-open', sessionId, policy: preferences.policy });
@@ -344,7 +345,7 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 9);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 10);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });
@@ -373,6 +374,7 @@ if (process.argv[2] === 'crash-child') {
                     assert.equal(recovered.Session(f.session).state, 'interrupted');
                     if (phase.startsWith('queue-')) {
                         const summary = recovered.Queue.Summary(), previous = recovered.Queue.Execute({ operation: 'queue-list' })[0];
+                        if (phase !== 'queue-added') assert.equal(summary.waitingNextRun, 1);
                         assert.equal(recovered.Queue.Execute({ operation: 'queue-selections' }).length, 1);
                         assert.equal(summary.state, phase === 'queue-added' ? 'Paused' : 'Interrupted');
                         assert.equal(summary.chaptersStarted, phase === 'queue-verified' ? 1 : 0);
@@ -380,6 +382,11 @@ if (process.argv[2] === 'crash-child') {
                         recovered.Queue.Execute({ operation: 'queue-open', preferences, confirmed: true });
                         const resumed = recovered.Queue.Execute({ operation: 'queue-next' });
                         assert.equal(recovered.Queue.Execute({ operation: 'queue-next' }).sessionId, resumed.sessionId);
+                        if (phase !== 'queue-added') {
+                            assert.equal(recovered.Queue.Summary().batchId, summary.batchId);
+                            const late = recovered.Queue.Execute({ operation: 'queue-list' }).find(row => row.mangaId === 'late-after-confirmation');
+                            assert.equal(late.sessionId, null); assert.equal(late.inCurrentRun, false);
+                        }
                         if (previous.sessionId) assert.equal(resumed.sessionId, previous.sessionId);
                         assert.equal(recovered.database.prepare('SELECT count(*) n FROM sessions').get().n, 2);
                         if (phase === 'queue-verified') {

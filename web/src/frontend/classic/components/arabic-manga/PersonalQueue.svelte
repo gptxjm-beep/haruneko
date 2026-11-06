@@ -3,6 +3,7 @@
     import { GetSelectiveQueueController, QueueSupported } from '../../../../engine/archive/SelectiveQueueController';
     import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
     import type { SelectedManga, QueueManga } from '../../../../../../app/electron/src/archive/SelectiveQueueContract';
+    import { QueueScopeLabels, QueueScopeNotice } from '../../../../../../app/electron/src/archive/SelectiveQueueContract';
     import { GetArchiveUIController } from '../../../../engine/archive/ArchiveUIController';
     import { GetSelectiveQueueRunner } from '../../../../engine/archive/SelectiveQueueRunner';
     import type { ArchivePreferences } from '../../../../../../app/electron/src/archive/ArchiveUIContract';
@@ -43,11 +44,14 @@
 </script>
 <section data-testid={selections ? 'personal-selections' : 'personal-queue'}>
     <h2>{selections ? 'الاختيارات المحفوظة' : 'Download Queue'}</h2>
+    <p role="note">تنبيه بيانات: يستخدم هذا الإصدار SQLite v10. قد ترفض Preview قديمة قاعدة v9 أو أحدث؛ الرجوع يتطلب نسخة احتياطية متسقة من ملف تعريف الإصدار السابق بعد إغلاقه، وليس حذف القاعدة أو خفض إصدارها يدويًا.</p>
     {#if !QueueSupported()}<p role="alert">هذه الوظيفة تتطلب Electron؛ لم تبدأ أي مهمة.</p>{:else}
         <p>المحدد: {view.summary?.selected ?? 0} • عناصر القائمة: {view.summary?.queued ?? 0}. الإضافة لا تبدأ التنزيل.</p>
         {#if selections}<button disabled={busy} onclick={() => action(() => queue.Add())}>Add Selected to Queue</button>{/if}
         {#if !selections}
             <p data-testid="queue-budget">الحالة: {view.summary?.state} — {view.summary?.reason}. الميزانية التراكمية: {view.summary?.mangasUsed ?? 0}/5 مانجات، {view.summary?.chaptersStarted ?? 0}/20 محاولة. الاستئناف والإزالة وإعادة الإضافة لا تصفر الميزانية.</p>
+            <p data-testid="queue-run-membership">عناصر مؤجلة لتأكيد تشغيل لاحق: {view.summary?.waitingNextRun ?? 0}. تثبت مجموعة التشغيل عند التأكيد؛ الإضافة أو إعادة الإضافة أثناء التشغيل لا تضم العنصر إليها، والاستئناف يحافظ على المجموعة نفسها.</p>
+            <p data-testid="queue-scope-notice">{QueueScopeNotice}</p>
             <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(configure)}>Start Downloads / Resume…</button>
             <button disabled={busy || view.summary?.state !== 'Running'} onclick={() => action(() => GetSelectiveQueueRunner().Pause())}>Pause</button>
             <button disabled={busy} onclick={() => action(() => GetSelectiveQueueRunner().Cancel())}>Cancel</button>
@@ -72,12 +76,13 @@
                     <button disabled={busy} onclick={() => action(() => queue.Add(row))}>Add to Queue</button>
                 {:else if 'state' in row}
                     <p>{row.state} — {row.reason}</p>
+                    {#if view.summary?.batchId && !row.inCurrentRun && ['Queued','Paused'].includes(row.state)}<p>ينتظر تأكيد تشغيل لاحق؛ ليس ضمن مجموعة التشغيل الحالية.</p>{/if}
                     {#if row.reason.includes('unknown-order')}<p class="warning">ترتيب الفصول غير موثق؛ لن يُستنتج من عناوينها ولن تُجبر الجلسة على التنزيل.</p>{/if}
                     {#if row.progress}<p>الفصول المتحقق منها: {row.progress.verified}/{row.progress.registered} • بيانات موثقة: {row.progress.bytes} بايت{row.progress.chapter ? ` • الفصل الجاري: ${row.progress.chapter}` : ''}</p>{#if row.progress.storage}<p role="alert">توقف التخزين: {row.progress.storage}. الملفات المكتملة محفوظة؛ يلزم معالجة المساحة أو القرص قبل الاستئناف.</p>{/if}{/if}
                     <p>النطاق: {JSON.stringify(row.scope)}. Completed يعني تحقق العمل المطلوب، ولا يثبت اكتمال المصدر.</p>
                     {#if !row.sessionId}
                         <label>نطاق الفصول <select disabled={busy || view.summary?.state === 'Running'} value={row.scope.mode} onchange={event => action(() => scope(row, event.currentTarget.value as 'all' | 'missing' | 'range'))}>
-                            <option value="all">جميع الفصول في القائمة المكتشفة</option><option value="missing">الجديدة أو الناقصة عند التحضير (إعادة استخدام السليم)</option><option value="range">نطاق مواضع موثق</option>
+                            <option value="all">{QueueScopeLabels.all}</option><option value="missing">{QueueScopeLabels.missing}</option><option value="range">{QueueScopeLabels.range}</option>
                         </select></label>
                         {#if row.scope.mode === 'range'}
                             <label>من <input type="number" min="1" value={row.scope.from} disabled={busy} onchange={event => action(() => queue.Edit(row.seq, 'up', { mode: 'range', from: Number(event.currentTarget.value), to: row.scope.mode === 'range' ? row.scope.to : 1 }))} /></label>
@@ -86,7 +91,7 @@
                     {/if}
                     <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'up'))}>رفع</button>
                     <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'down'))}>خفض</button>
-                    <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'remove'))}>إزالة من القائمة دون حذف الملفات</button>
+                    <button disabled={busy || ['Preparing','Downloading'].includes(row.state)} onclick={() => action(() => queue.Edit(row.seq, 'remove'))}>إزالة من القائمة دون حذف الملفات</button>
                 {/if}
             </article>
         {/each}

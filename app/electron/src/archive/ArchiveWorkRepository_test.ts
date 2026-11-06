@@ -35,7 +35,7 @@ describe('Persistent archive work queue', () => {
             command({ operation: 'archive-manga-list', mangaId: 'm', chapters: [{ id: 'c', title: 'C', position: 0, language: 'ar' }], order: 'ascending', orderEvidence: evidence, evidence: { state: 'unknown', evidence: '' } });
             f.database.exec("UPDATE archive_work SET reason='Prior fetch failure',attempts=1; UPDATE archive_runs SET chapters_started=2");
             MigrateArchiveDatabase(f.database);
-            expect(f.database.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+            expect(f.database.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
             expect(f.database.prepare('SELECT state,reason,attempts FROM archive_work').get()).toMatchObject({ state: affected ? 'review' : 'pending',
                 reason: affected ? 'legacy-order-unverified: explicit ordering review required; previous: Prior fetch failure' : 'Prior fetch failure', attempts: 1 });
             expect(f.database.prepare('SELECT order_confidence,order_evidence FROM session_chapters').get()).toMatchObject({ order_confidence: affected ? 'unknown' : 'connector-contract', order_evidence: evidence });
@@ -158,7 +158,7 @@ describe('Persistent archive work queue', () => {
             expect(database.prepare("SELECT name FROM sqlite_master WHERE name='archive_runs'").get()).toBeUndefined();
             database.exec('DROP TABLE archive_work');
             MigrateArchiveDatabase(database);
-            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
         } finally { database.close(); }
     });
 
