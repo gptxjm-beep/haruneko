@@ -12,7 +12,8 @@ import { EngineArchiveSource, type ArchiveSource, type ArchiveChapterManifest } 
 import type { EnqueueArchiveChapter } from './ArchiveDownload';
 import { Manga, Chapter, type MangaPlugin, type MangaScraper } from '../providers/MangaPlugin';
 import { DownloadManager } from '../DownloadManager';
-import type { DownloadResult, DownloadHandle } from '../DownloadContract';
+import { ArchiveCapacityError, type DownloadResult, type DownloadHandle } from '../DownloadContract';
+import type { ArchiveStorageFault } from '../../../../app/electron/src/archive/ArchiveStorageContract';
 import type { StorageController } from '../StorageController';
 import { Tags } from '../Tags';
 
@@ -36,6 +37,7 @@ async function fixture(catalog = [{ id: 'manga', title: 'Manga' }]) {
     const site = { Identifier: 'site', Title: 'Site', Tags: { Value: [Tags.Language.Multilingual] }, Entries: { Value: [] }, Update: vi.fn(), Initialize: vi.fn().mockResolvedValue(undefined),
         CreateEntry: (id: string, title: string) => new Manga(scraper as unknown as MangaScraper, site, id, title) } as unknown as MangaPlugin;
     let intercept: ((command: ArchiveCommand) => void) | undefined;
+    let storageFault: ArchiveStorageFault | undefined;
     const invoke = vi.fn(async (command: ArchiveCommand): Promise<ArchiveReply> => {
         try {
             intercept?.(command);
@@ -43,6 +45,9 @@ async function fixture(catalog = [{ id: 'manga', title: 'Manga' }]) {
             if (command.operation.startsWith('archive-')) value = repository.Work.Execute(command as ArchiveCoordinatorCommand);
             else switch (command.operation) {
                 case 'session': value = repository.Session(command.sessionId); break;
+                case 'storage-check':
+                    if (storageFault) return { ok: false, error: { kind: 'storage', message: `Storage ${storageFault.code}`, storage: storageFault } };
+                    value = undefined; break;
                 case 'recover-chapter': value = await files.Recover(command.sessionId, command.chapterKey); break;
                 default: throw new Error('Unexpected test command ' + command.operation);
             }
@@ -87,12 +92,85 @@ async function fixture(catalog = [{ id: 'manga', title: 'Manga' }]) {
         get Repository() { return repository; },
         manager: () => new ArchiveManager(site, downloads, client, session, policy, { source, enqueue }),
         setIntercept: (value: typeof intercept) => { intercept = value; },
+        setStorageFault: (value: typeof storageFault) => { storageFault = value; },
         setBeforeDownload: (value: typeof beforeDownload) => { beforeDownload = value; },
         async reopen() { await files.Close(); repository.Close(); repository = new ArchiveRepository(filename); files = new ArchiveFiles(repository); },
     };
 }
 
 describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
+    it('Should discover native archive entries without writing the manual UI cache', async () => {
+        const f = await fixture();
+        f.site.FetchArchiveEntries = vi.fn().mockResolvedValue([f.site.CreateEntry('manga', 'Manga')]);
+        const source = new EngineArchiveSource(f.site);
+        const pages = [];
+        for await (const page of source.Catalog(new AbortController().signal)) pages.push(page);
+        expect(pages[0].items).toEqual([{ id: 'manga', title: 'Manga' }]);
+        expect(f.site.Update).not.toHaveBeenCalled();
+        expect(f.site.Entries.Value).toEqual([]);
+    });
+    it('Should pause before discovery when storage is low and resume after capacity is restored', async () => {
+        const f = await fixture();
+        f.setStorageFault({ code: 'low-space', location: 'archive' });
+        const stopped = await f.manager().Start();
+        expect(stopped.state).toBe('paused');
+        expect(stopped.storageError?.code).toBe('low-space');
+        expect(stopped.catalogAttempts).toBe(0);
+        expect(f.calls).toEqual([]);
+        await f.reopen();
+        expect(f.Repository.Work.Snapshot(f.session).storageError?.code).toBe('low-space');
+        f.setStorageFault(undefined);
+        const resumed = await f.manager().Resume();
+        expect(resumed.state).toBe('drained');
+        expect(resumed.storageError).toBeNull();
+    });
+
+    it('Should not spend the connector retry allowance on a storage stop during a chapter', async () => {
+        const f = await fixture();
+        f.policy.maxAttempts = 1;
+        f.setBeforeDownload(async () => { throw new ArchiveCapacityError('Quota exhausted', { code: 'quota-exceeded', location: 'indexeddb' }); });
+        const stopped = await f.manager().Start();
+        expect(stopped.state).toBe('paused');
+        expect(stopped.storageError?.code).toBe('quota-exceeded');
+        expect(stopped.chaptersStarted).toBe(1);
+        f.setBeforeDownload(undefined);
+        expect((await f.manager().Resume()).state).toBe('drained');
+        expect(f.calls).toEqual(['manga/old', 'manga/old', 'manga/new']);
+    });
+
+    it('Should retain the storage fault when the caller also requested a graceful pause', async () => {
+        const f = await fixture();
+        const manager = f.manager();
+        f.setBeforeDownload(async () => {
+            void manager.Pause();
+            throw new ArchiveCapacityError('Disk became full', { code: 'write-full', location: 'archive' });
+        });
+        const stopped = await manager.Start();
+        expect(stopped.state).toBe('paused');
+        expect(stopped.storageError?.code).toBe('write-full');
+        f.setBeforeDownload(undefined);
+        expect((await f.manager().Resume()).state).toBe('drained');
+    });
+
+    it('Should preserve the capacity fault if SQLite cannot save the pause receipt', async () => {
+        const f = await fixture();
+        f.setStorageFault({ code: 'write-full', location: 'database' });
+        f.setIntercept(command => { if (command.operation === 'archive-storage-stop') throw new Error('SQLITE_FULL'); });
+        const error = await f.manager().Start().catch(error => error);
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error.cause.Fault.code).toBe('write-full');
+        expect(f.calls).toEqual([]);
+    });
+
+    it('Should reuse healthy outputs after a disconnected destination is restored', async () => {
+        const f = await fixture();
+        await f.manager().Start();
+        f.setStorageFault({ code: 'disconnected', location: 'archive' });
+        expect((await f.manager().Resume()).storageError?.code).toBe('disconnected');
+        f.setStorageFault(undefined);
+        expect((await f.manager().Resume()).counts.healthy).toBe(2);
+        expect(f.calls.length).toBe(2);
+    });
     it('Should register 364 chapters in bounded batches and download only the oldest twenty', async () => {
         const f = await fixture();
         f.manifests.get('manga')!.chapters = Array.from({ length: 364 }, (_, index) => ({ id: `c${363 - index}`, title: `Chapter ${363 - index}`, position: index, language: 'ar' }));

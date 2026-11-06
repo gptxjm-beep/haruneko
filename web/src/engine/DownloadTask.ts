@@ -283,11 +283,13 @@ export class DownloadTask {
                 let itemStage: DownloadStage = 'fetch';
                 try {
                     cancellator.signal.throwIfAborted();
+                    if (this.Options.archiveTarget?.beforeFetch) await this.Options.archiveTarget.beforeFetch();
                     const data = await item.Fetch(Priority.Low, cancellator.signal);
                     cancellator.signal.throwIfAborted();
                     this.receivedPages++;
                     if (IsValidatedImage(data)) this.validatedPages++;
                     itemStage = 'temporary-storage';
+                    if (this.Options.archiveTarget?.beforeTemporaryWrite) await this.Options.archiveTarget.beforeTemporaryWrite(data.size);
                     if (this.Options.beforeTemporaryWrite) await this.Options.beforeTemporaryWrite(data.size);
                     cancellator.signal.throwIfAborted();
                     const resource = await this.storageController.SaveTemporary(data);
@@ -296,19 +298,20 @@ export class DownloadTask {
                     itemStage = 'repository';
                     if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('fetch', this.receivedPages, this.validatedPages);
                 } catch(error) {
+                    if (this.Options.archiveTarget && error instanceof DOMException && error.name === 'QuotaExceededError') error = new ArchiveCapacityError('Browser temporary storage quota was exhausted during writing', { code: 'quota-exceeded', location: 'indexeddb' });
                     if (error instanceof ImageValidationError) this.validationFailed = true;
                     this.Record(error instanceof ImageValidationError ? 'validation' : error instanceof ArchivePersistenceError ? 'repository' : itemStage, error);
                     // TODO: Abort all other pending downloads or keep running?
                     throw error;
                 }
             };
-            if (this.Options.pageDelayMs === undefined) {
+            if (this.Options.pageDelayMs === undefined && !this.Options.archiveTarget?.beforeFetch) {
                 await Promise.allSettled(this.Media.Entries.Value.map(fetch));
             } else {
                 // Do not enqueue every page in a second task pool: its throttle timer is not abortable.
                 for (let index = 0; index < this.Media.Entries.Value.length; index++) {
                     cancellator.signal.throwIfAborted();
-                    if (index) await this.WaitForArchivePage(this.Options.pageDelayMs, cancellator.signal);
+                    if (index && this.Options.pageDelayMs) await this.WaitForArchivePage(this.Options.pageDelayMs, cancellator.signal);
                     try { await fetch(this.Media.Entries.Value[index], index); }
                     catch(error) { if (error instanceof ArchiveCapacityError) break; /* fetch already records the stage and cause. */ }
                 }
@@ -330,7 +333,9 @@ export class DownloadTask {
                         this.outputTarget = { ...target };
                         this.exportProgress.Value = Object.freeze({ state: 'preparing', expectedFiles: count, writtenFiles: this.files.length });
                         if (this.Options.archiveTarget) await this.Options.archiveTarget.beginExport(count, target?.format ?? this.Options.archiveTarget.format);
+                        if (this.Options.archiveTarget?.prepare) await this.Options.archiveTarget.prepare((this.expectedPages ?? 0) * 64 * 1024);
                     },
+                    prepare: this.Options.archiveTarget?.prepare,
                     writing: path => {
                         this.attemptedPaths.push(path);
                         this.exportProgress.Value = Object.freeze({ state: 'writing', expectedFiles: this.expectedFiles, writtenFiles: this.files.length });

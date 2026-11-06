@@ -3,6 +3,7 @@ import { MangaExporter } from './MangaExporter';
 import { SanitizeFileName } from '../StorageController';
 import type { ExportContext } from '../DownloadContract';
 import { WriteExportFile } from './WriteExportFile';
+import { CollectArchiveBlob } from './CollectArchiveBlob';
 
 export class ElectronicPublicationExporter extends MangaExporter {
 
@@ -220,6 +221,7 @@ export class ElectronicPublicationExporter extends MangaExporter {
         oebps.file('content.opf', opf.serialize(), { compression: 'DEFLATE' });
 
         context?.signal.throwIfAborted();
-        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.epub'), await zip.generateAsync({ type: 'blob' }), context);
+        const data = context?.prepare ? await CollectArchiveBlob(zip.generateInternalStream({ type: 'uint8array' }), context, 'application/epub+zip') : await zip.generateAsync({ type: 'blob' });
+        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.epub'), data, context);
     }
 }

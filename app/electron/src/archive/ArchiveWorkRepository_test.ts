@@ -17,6 +17,43 @@ function fixture() {
 }
 
 describe('Persistent archive work queue', () => {
+    it('Should roll back a failed v5 migration without changing existing v4 budgets', () => {
+        const database = new DatabaseSync(':memory:');
+        try {
+            MigrateArchiveDatabase(database, 4);
+            database.exec(`INSERT INTO roots(id,path,label) VALUES('r','/test','Test');
+                INSERT INTO sessions(id,root_id,site_id,site_name,state,settings,started_at,updated_at) VALUES('s','r','site','Site','paused','{}',0,0);
+                INSERT INTO archive_runs(session_id,state,policy,chapters_started) VALUES('s','paused','{}',17);
+                ALTER TABLE archive_runs ADD COLUMN storage_error TEXT`);
+            expect(() => MigrateArchiveDatabase(database)).toThrow();
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(4);
+            expect(database.prepare('SELECT chapters_started FROM archive_runs').get()!.chapters_started).toBe(17);
+            database.exec('ALTER TABLE archive_runs DROP COLUMN storage_error');
+            MigrateArchiveDatabase(database);
+            expect(database.prepare('SELECT chapters_started,storage_error FROM archive_runs').get()).toMatchObject({ chapters_started: 17, storage_error: null });
+        } finally { database.close(); }
+    });
+
+    it('Should keep the download budget and roll back all pause state when SQLite rejects a storage receipt', () => {
+        const f = fixture();
+        try {
+            const command = (input: Record<string, unknown>) => f.repository.Execute({ sessionId: 'session', ...input } as ArchiveCoordinatorCommand);
+            command({ operation: 'archive-catalog-page', items: [{ id: 'm', title: 'M' }] });
+            command({ operation: 'archive-manga-begin', mangaId: 'm' });
+            command({ operation: 'archive-manga-list', mangaId: 'm', chapters: [{ id: 'c', title: 'C', position: 0, language: null }], order: 'ascending', orderEvidence: 'Fixture', evidence: { state: 'unknown', evidence: '' } });
+            command({ operation: 'archive-chapter-begin', mangaId: 'm', chapterId: 'c' });
+            const stopped = { operation: 'archive-storage-stop', mangaId: 'm', chapterId: 'c', fault: { code: 'write-full', location: 'database' } };
+            f.database.exec("CREATE TRIGGER fail_pause BEFORE UPDATE ON archive_runs WHEN NEW.storage_error IS NOT NULL BEGIN SELECT RAISE(ABORT,'database or disk is full'); END");
+            expect(() => command(stopped)).toThrow('disk is full');
+            expect(f.database.prepare('SELECT state,attempts FROM archive_work').get()).toMatchObject({ state: 'downloading', attempts: 1 });
+            expect(f.repository.Snapshot('session').state).toBe('running');
+            f.database.exec('DROP TRIGGER fail_pause');
+            command(stopped);
+            expect(f.repository.Snapshot('session')).toMatchObject({ state: 'paused', chaptersStarted: 1, storageError: { code: 'write-full' } });
+            expect(f.database.prepare('SELECT state,attempts FROM archive_work').get()).toMatchObject({ state: 'pending', attempts: 0 });
+            expect(f.database.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok');
+        } finally { f.database.close(); }
+    });
     it('Should migrate v2 atomically without leaving partial coordinator tables', () => {
         const database = new DatabaseSync(':memory:');
         try {
@@ -27,7 +64,7 @@ describe('Persistent archive work queue', () => {
             expect(database.prepare("SELECT name FROM sqlite_master WHERE name='archive_runs'").get()).toBeUndefined();
             database.exec('DROP TABLE archive_work');
             MigrateArchiveDatabase(database);
-            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(4);
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(5);
         } finally { database.close(); }
     });
 

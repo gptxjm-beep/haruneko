@@ -3,6 +3,7 @@ import { MangaExporter } from './MangaExporter';
 import { SanitizeFileName } from '../StorageController';
 import type { ExportContext } from '../DownloadContract';
 import { WriteExportFile } from './WriteExportFile';
+import { CollectArchiveBlob } from './CollectArchiveBlob';
 
 export class ComicBookArchiveExporter extends MangaExporter {
 
@@ -36,6 +37,7 @@ export class ComicBookArchiveExporter extends MangaExporter {
         }
 
         context?.signal.throwIfAborted();
-        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.cbz'), await zip.generateAsync({ type: 'blob' }), context);
+        const data = context?.prepare ? await CollectArchiveBlob(zip.generateInternalStream({ type: 'uint8array' }), context, 'application/x-cbz') : await zip.generateAsync({ type: 'blob' });
+        await WriteExportFile(targetDirectory, SanitizeFileName(chapterTitle + '.cbz'), data, context);
     }
 }

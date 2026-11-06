@@ -66,6 +66,11 @@ export class ArchiveWorkRepository {
         for (const row of this.database.prepare('SELECT session_id FROM archive_runs WHERE catalog_active=1').all()) this.InterruptCatalog(String(row.session_id), 'interrupted');
     }
 
+    public ManifestStorageEstimate(sessionId: string, mangaId: string): bigint {
+        const row = this.database.prepare('SELECT expected_count FROM archive_manifests WHERE session_id=? AND manga_id=?').get(sessionId, mangaId);
+        return BigInt(String(row?.expected_count ?? 0)) * 64n * 1024n;
+    }
+
     private BeginManifest(sessionId: string, mangaId: string, count: number, order: string, orderEvidence: string, coverage: ArchiveEvidence): string {
         const manga = this.Manga(sessionId, mangaId);
         if (manga.listed || !['listing', 'registering'].includes(String(manga.state))) throw new Error('Manga is not awaiting a chapter manifest');
@@ -156,7 +161,7 @@ export class ArchiveWorkRepository {
         const due = this.database.prepare(`SELECT min(next_retry) AS due FROM archive_mangas WHERE session_id=? AND next_retry>0
             AND (state='ready' OR state='review' AND retryable=1 AND listings<?)`).get(sessionId, run.policy.maxAttempts)!.due;
         return { sessionId, state: run.state, policy: run.policy, catalogDone: !!run.catalog_done, catalogPages: run.catalog_pages,
-            index: { state: run.index_state, evidence: run.index_evidence }, mangasUsed: run.mangas_used, chaptersStarted: run.chapters_started, reason: run.reason, catalogAttempts: run.catalog_attempts, catalogState: run.catalog_state, counts, nextRetry: due === null ? null : Number(due) };
+            index: { state: run.index_state, evidence: run.index_evidence }, mangasUsed: run.mangas_used, chaptersStarted: run.chapters_started, reason: run.reason, catalogAttempts: run.catalog_attempts, catalogState: run.catalog_state, storageError: run.storage_error ? JSON.parse(String(run.storage_error)) : null, counts, nextRetry: due === null ? null : Number(due) };
     }
 
     public Execute(command: ArchiveCoordinatorCommand): unknown {
@@ -171,6 +176,7 @@ export class ArchiveWorkRepository {
                 this.database.prepare(`INSERT INTO archive_runs(session_id,state,policy,epoch) VALUES(?,'running',?,1)
                     ON CONFLICT(session_id) DO UPDATE SET state='running',epoch=epoch+1,reason=''`).run(sessionId, JSON.stringify(policy));
                 this.InterruptCatalog(sessionId, 'interrupted');
+                if (previous?.storage_error) this.database.prepare("UPDATE attempts SET state='interrupted' WHERE session_id=? AND state='running'").run(sessionId);
                 this.database.prepare("UPDATE archive_mangas SET state='pending',listings=max(0,listings-1),reason='Interrupted chapter registration must restart' WHERE session_id=? AND state='registering' AND listed=0").run(sessionId);
                 this.database.prepare("UPDATE archive_mangas SET state='review',retryable=0,reason='Interrupted chapter listing exhausted its attempt budget' WHERE session_id=? AND state='listing' AND listings>=?").run(sessionId, policy.maxAttempts);
                 this.database.prepare("UPDATE archive_mangas SET state='pending' WHERE session_id=? AND state='listing'").run(sessionId);
@@ -183,11 +189,26 @@ export class ArchiveWorkRepository {
         }
         const run = this.Run(sessionId);
         if (command.operation === 'archive-run-snapshot') return this.Snapshot(sessionId);
+        if (command.operation === 'archive-storage-stop') {
+            const fault = command.fault;
+            if (!fault || !['low-space', 'unmeasurable', 'disconnected', 'destination-changed', 'permission-denied', 'write-full', 'quota-exceeded'].includes(fault.code)) throw new Error('Invalid storage fault');
+            Text(fault.location, 'storage location', 64);
+            const data = JSON.stringify(fault);
+            if (data.length > 2048) throw new Error('Storage fault is too large');
+            return this.Transaction(() => {
+                if (command.mangaId && command.chapterId) this.database.prepare("UPDATE archive_work SET state='pending',attempts=max(0,attempts-1),checked_epoch=0,reason='Storage stopped; reconcile output before retry' WHERE session_id=? AND manga_id=? AND id=? AND state='downloading'").run(sessionId, command.mangaId, command.chapterId);
+                this.InterruptCatalog(sessionId, 'paused');
+                this.database.prepare("UPDATE archive_runs SET storage_error=?,state='paused',reason=? WHERE session_id=?").run(data, `Storage ${fault.code} (${fault.location})`, sessionId);
+                this.database.prepare("UPDATE sessions SET state='paused',updated_at=? WHERE id=?").run(Date.now(), sessionId);
+                this.Event(sessionId, 'storage-stop', data, command.mangaId, command.chapterId);
+            });
+        }
         if (command.operation === 'archive-events') return this.database.prepare('SELECT * FROM archive_events WHERE session_id=? AND id>? ORDER BY id LIMIT 100').all(sessionId, Count(command.after ?? 0, 'event cursor', Number.MAX_SAFE_INTEGER));
         if (command.operation === 'archive-run-state') {
             if (!['paused', 'cancelled', 'interrupted', 'limited', 'review', 'drained', 'failed'].includes(command.state)) throw new Error('Invalid run transition');
             return this.Transaction(() => {
                 this.database.prepare('UPDATE archive_runs SET state=?,reason=? WHERE session_id=?').run(command.state, SafeMessage(command.reason), sessionId);
+                if (command.state !== 'paused') this.database.prepare('UPDATE archive_runs SET storage_error=NULL WHERE session_id=?').run(sessionId);
                 this.database.prepare('UPDATE sessions SET state=?,updated_at=? WHERE id=?').run(command.state === 'cancelled' ? 'closed' : 'paused', Date.now(), sessionId);
                 this.Event(sessionId, command.state, command.reason);
             });

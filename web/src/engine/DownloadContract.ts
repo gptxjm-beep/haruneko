@@ -1,5 +1,6 @@
 import type { IObservable } from './Observable';
 import type { Status, DownloadTask } from './DownloadTask';
+import type { ArchiveStorageFault } from '../../../app/electron/src/archive/ArchiveStorageContract';
 
 export interface DownloadOptions {
     readonly directory?: FileSystemDirectoryHandle;
@@ -19,7 +20,9 @@ export interface DownloadOptions {
 
 export class ArchivePersistenceError extends Error {}
 /** A future capacity gate can stop the coordinator rather than treating low space as a bad chapter. */
-export class ArchiveCapacityError extends Error {}
+export class ArchiveCapacityError extends Error {
+    constructor(message = 'Archive storage unavailable', public readonly Fault?: ArchiveStorageFault) { super(message); }
+}
 
 export interface NativeArchiveTarget {
     readonly identity: string;
@@ -28,6 +31,9 @@ export interface NativeArchiveTarget {
     readonly useWebsiteSubDirectory: boolean;
     checkpoint(stage: DownloadStage, receivedPages: number, validatedPages: number): Promise<void>;
     beginExport(expectedFiles: number, format: string): Promise<void>;
+    beforeTemporaryWrite?(bytes: number): Promise<void>;
+    beforeFetch?(): Promise<void>;
+    prepare?(bytes: number): Promise<void>;
     write(path: string, data: Blob, signal: AbortSignal): Promise<WrittenFile>;
 }
 
@@ -52,6 +58,7 @@ export interface ExportContext {
     readonly existingFiles?: 'replace' | 'preserve';
     begin(expectedFiles: number, target?: { directory?: FileSystemDirectoryHandle; rootId?: string; format: string }): void | Promise<void>;
     write?(path: string, data: Blob, signal: AbortSignal): Promise<WrittenFile>;
+    prepare?(bytes: number): Promise<void>;
     writing(path: string): void;
     written(file: WrittenFile): void;
     /** Verify acknowledged files before the output directory lock is released. */

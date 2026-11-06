@@ -43,6 +43,9 @@ export async function EnqueueArchiveChapter(manager: DownloadManager, client: Ar
             return Object.freeze({ ...result, outcome: 'unverified', errors: Object.freeze([...result.errors,
                 Object.freeze({ stage: 'repository' as const, error: error instanceof Error ? error : new Error(String(error)) })]) }) as DownloadResult;
         }
+    }).finally(async () => {
+        try { await client.Request({ operation: 'storage-release', attemptId }); }
+        catch { /* A disconnected IPC must not erase a durable output receipt. Stale reservations only deny future writes. */ }
     });
     const handle: DownloadHandle = Object.freeze({ ...original, completion,
         retryCleanup: async () => {

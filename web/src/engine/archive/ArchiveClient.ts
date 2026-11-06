@@ -1,5 +1,5 @@
 import { ArchiveChannel, type ArchiveCommand, type ArchiveReply, type ArchiveFileReceipt } from '../../../../app/electron/src/archive/ArchiveProtocol';
-import { ArchivePersistenceError, type NativeArchiveTarget } from '../DownloadContract';
+import { ArchivePersistenceError, ArchiveCapacityError, type NativeArchiveTarget } from '../DownloadContract';
 
 export class ArchiveClient {
     constructor(private readonly invoke: (command: ArchiveCommand) => Promise<ArchiveReply> = command => {
@@ -7,9 +7,25 @@ export class ArchiveClient {
         return globalThis.ipcRenderer.invoke(ArchiveChannel, command);
     }) {}
 
+    private async Quota(): Promise<{ usage: number; quota: number }> {
+        let quota: StorageEstimate;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            quota = await Promise.race([navigator.storage.estimate(), new Promise<StorageEstimate>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new ArchiveCapacityError('Browser quota measurement timed out', { code: 'unmeasurable', location: 'indexeddb-quota', systemCode: 'MEASUREMENT_TIMEOUT' })), 5000);
+            })]);
+        } catch(error) {
+            if (error instanceof ArchiveCapacityError) throw error;
+            throw new ArchiveCapacityError('Browser storage quota cannot be measured', { code: 'unmeasurable', location: 'indexeddb-quota' });
+        } finally { clearTimeout(timer); }
+        if (!quota || !Number.isSafeInteger(quota.usage) || !Number.isSafeInteger(quota.quota)) throw new ArchiveCapacityError('Browser storage quota is unknown', { code: 'unmeasurable', location: 'indexeddb-quota' });
+        return { usage: quota.usage, quota: quota.quota };
+    }
+
     public async Request<T>(command: ArchiveCommand): Promise<T> {
         const reply = await this.invoke(command);
         if (reply.ok === false) {
+            if (reply.error.kind === 'storage') throw new ArchiveCapacityError(reply.error.message, reply.error.storage);
             if (reply.error.kind === 'repository') throw new ArchivePersistenceError(reply.error.message);
             throw new Error(reply.error.message);
         }
@@ -21,13 +37,18 @@ export class ArchiveClient {
             identity: attemptId, rootId: session.root_id, format: session.settings.format, useWebsiteSubDirectory: session.settings.useWebsiteSubDirectory,
             checkpoint: async (stage, receivedPages, validatedPages) => {
                 try { await this.Request({ operation: 'checkpoint', attemptId, stage, receivedPages, validatedPages }); }
-                catch(cause) { throw new ArchivePersistenceError('Archive progress could not be committed', { cause }); }
+                catch(cause) { if (cause instanceof ArchiveCapacityError) throw cause; throw new ArchivePersistenceError('Archive progress could not be committed', { cause }); }
             },
             beginExport: async (expectedFiles, format) => {
                 if (format !== session.settings.format) throw new Error('Archive export format differs from the session');
                 try { await this.Request({ operation: 'checkpoint', attemptId, stage: 'export', expectedFiles }); }
-                catch(cause) { throw new ArchivePersistenceError('Archive export plan could not be committed', { cause }); }
+                catch(cause) { if (cause instanceof ArchiveCapacityError) throw cause; throw new ArchivePersistenceError('Archive export plan could not be committed', { cause }); }
             },
+            beforeTemporaryWrite: async bytes => {
+                await this.Request({ operation: 'storage-image', attemptId, bytes, quota: await this.Quota() });
+            },
+            beforeFetch: async () => { await this.Request({ operation: 'storage-image-preflight', attemptId, quota: await this.Quota() }); },
+            prepare: bytes => this.Request({ operation: 'storage-prepare', attemptId, bytes }),
             write: async (path, data, signal) => {
                 signal.throwIfAborted();
                 const writeId = await this.Request<string>({ operation: 'begin-file', attemptId, path, size: data.size });

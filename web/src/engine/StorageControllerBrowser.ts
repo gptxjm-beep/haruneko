@@ -62,13 +62,20 @@ export class StorageControllerBrowser implements StorageController {
         const tx = db.transaction(store, 'readwrite');
         const bucket = tx.objectStore(store);
         const queries = key ? [ bucket.put(value, key) ] : Object.keys(value).map(key => bucket.put(value[key], key));
+        await this.CommitWrite(db, tx, queries);
+    }
+
+    private async CommitWrite(db: IDBDatabase, tx: IDBTransaction, queries: IDBRequest[]): Promise<void> {
         const promises = queries.map(query => new Promise<void>((resolve, reject) => {
             query.onsuccess = () => resolve(/*query.result*/);
             query.onerror = () => reject(query.error);
         }));
-        tx.oncomplete = () => db.close();
-        tx.commit();
-        await Promise.all(promises);
+        const committed = new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onabort = () => reject(tx.error ?? new DOMException('Storage transaction aborted', 'AbortError'));
+        });
+        try { await Promise.all([...promises, committed, Promise.resolve().then(() => tx.commit())]); }
+        finally { db.close(); }
     }
 
     private async LoadIDB<T>(store: UnitedStore, key?: string): Promise<T> {
@@ -90,13 +97,7 @@ export class StorageControllerBrowser implements StorageController {
         const tx = db.transaction(store, 'readwrite');
         const bucket = tx.objectStore(store);
         const queries = keys.length > 0 ? keys.map(key => bucket.delete(key)) : [ bucket.clear() ];
-        const promises = queries.map(query => new Promise<void>((resolve, reject) => {
-            query.onsuccess = () => resolve(/*query.result*/);
-            query.onerror = () => reject(query.error);
-        }));
-        tx.oncomplete = () => db.close();
-        tx.commit();
-        await Promise.all(promises);
+        await this.CommitWrite(db, tx, queries);
     }
 
     public async SavePersistent<T>(value: T, store: Store, key?: string): Promise<void> {

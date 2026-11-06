@@ -1,6 +1,7 @@
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
+import type { ArchiveStorageFault } from './ArchiveStorageContract';
 export const ArchiveChannel = 'ArchiveRepository::Request';
-export type ArchiveReply = { ok: true; value: unknown } | { ok: false; error: { kind: 'repository' | 'filesystem' | 'validation'; message: string } };
+export type ArchiveReply = { ok: true; value: unknown } | { ok: false; error: { kind: 'repository' | 'filesystem' | 'validation' | 'storage'; message: string; storage?: ArchiveStorageFault } };
 
 export interface ArchiveIdentity {
     siteId: string;
@@ -39,6 +40,11 @@ export interface ArchiveAttemptResult {
 }
 
 export type ArchiveCommand = ArchiveCoordinatorCommand
+    | { operation: 'storage-check'; sessionId: string }
+    | { operation: 'storage-image'; attemptId: string; bytes: number; quota: { usage: number; quota: number } }
+    | { operation: 'storage-image-preflight'; attemptId: string; quota: { usage: number; quota: number } }
+    | { operation: 'storage-prepare'; attemptId: string; bytes: number }
+    | { operation: 'storage-release'; attemptId: string }
     | { operation: 'choose-root' }
     | { operation: 'create-session'; rootId: string; siteId: string; siteName: string; settings: { format: string; useWebsiteSubDirectory: boolean } }
     | { operation: 'list-sessions' }

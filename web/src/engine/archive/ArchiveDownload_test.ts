@@ -30,6 +30,21 @@ function fixture(overrides: Partial<ArchiveRecovery> = {}, rejectFinish = false)
 }
 
 describe('Durable archive download adapter', () => {
+    it('Should bound an unanswered browser quota measurement and never authorize a late write', async () => {
+        vi.useFakeTimers();
+        try {
+            let release!: (value: StorageEstimate) => void;
+            vi.stubGlobal('navigator', { storage: { estimate: () => new Promise<StorageEstimate>(resolve => { release = resolve; }) } });
+            const invoke = vi.fn(async (): Promise<ArchiveReply> => ({ ok: true, value: undefined }));
+            const target = new ArchiveClient(invoke).Target('attempt', { root_id: 'root', settings: { format: 'image/*', useWebsiteSubDirectory: false } });
+            const checked = expect(target.beforeFetch!()).rejects.toMatchObject({ Fault: { code: 'unmeasurable', systemCode: 'MEASUREMENT_TIMEOUT' } });
+            await vi.advanceTimersByTimeAsync(5000);
+            await checked;
+            release({ usage: 0, quota: 1024 ** 4 });
+            await Promise.resolve();
+            expect(invoke).not.toHaveBeenCalled();
+        } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+    });
     for (const action of ['reuse', 'review', 'publish-staged'] as const) {
         it(`Should return ${action} without creating an image download`, async () => {
             const f = fixture({ action });

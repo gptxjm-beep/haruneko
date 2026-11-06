@@ -5,6 +5,9 @@ import { ArchiveFiles } from './ArchiveFiles';
 import { ArchiveChannel, type ArchiveCommand } from './ArchiveProtocol';
 import { SafeMessage } from './ArchivePaths';
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
+import { ArchiveStorageSafety, DefaultArchiveStoragePolicy, type ArchiveStoragePolicy, type ArchiveVolumeProbe } from './ArchiveStorageSafety';
+import { ArchiveStorageController } from './ArchiveStorageController';
+import { StorageFailure, ArchiveStorageError } from './ArchiveStorageContract';
 
 export function AssertArchiveSender(event: IpcMainInvokeEvent, window: BrowserWindow, expectedOrigin: string): void {
     if (event.sender !== window.webContents || !event.senderFrame || event.senderFrame !== window.webContents.mainFrame
@@ -17,8 +20,13 @@ export class ArchiveIPC {
     private files!: ArchiveFiles;
     private serial: Promise<unknown> = Promise.resolve();
     private pending = 0;
+    private storage!: ArchiveStorageController;
+    private readonly safety: ArchiveStorageSafety;
+    private readonly bootstrapSafety: ArchiveStorageSafety;
 
-    constructor(private readonly window: BrowserWindow, private readonly origin: string) {
+    constructor(private readonly window: BrowserWindow, private readonly origin: string, options: { storagePolicy?: ArchiveStoragePolicy; storageProbe?: ArchiveVolumeProbe } = {}) {
+        this.safety = new ArchiveStorageSafety(options.storagePolicy ?? DefaultArchiveStoragePolicy, options.storageProbe);
+        this.bootstrapSafety = new ArchiveStorageSafety({ reserveBytes: 0n, metadataHeadroomBytes: (options.storagePolicy ?? DefaultArchiveStoragePolicy).metadataHeadroomBytes }, options.storageProbe);
         ipcMain.handle(ArchiveChannel, (event, command) => {
             AssertArchiveSender(event, this.window, this.origin);
             if (!command || typeof command !== 'object' || Array.isArray(command) || typeof command.operation !== 'string') throw new Error('Invalid archive command');
@@ -27,6 +35,9 @@ export class ArchiveIPC {
             const operation = this.serial.then(() => this.Execute(command));
             this.serial = operation.catch(() => {});
             return operation.then(value => ({ ok: true, value })).catch(error => {
+                const databaseError = String(error.code ?? '').includes('SQLITE') || /database or disk is full/i.test(error.message ?? '');
+                const storage = StorageFailure(error, databaseError ? 'database' : 'archive-service');
+                if (storage) return { ok: false, error: { kind: 'storage', message: storage.message, storage: storage.Fault } };
                 return { ok: false, error: { kind: String(error.code ?? '').includes('SQLITE') ? 'repository' : error.code ? 'filesystem' : 'validation',
                     message: SafeMessage(error.code ? `Archive operation failed (${error.code})` : error.message) } };
             }).finally(() => { this.pending--; });
@@ -40,17 +51,37 @@ export class ArchiveIPC {
     public async Close(): Promise<void> {
         ipcMain.removeHandler(ArchiveChannel);
         await this.serial;
-        await this.files?.Close();
-        this.repository?.Close();
+        try { await this.files?.Close(); }
+        finally { this.repository?.Close(); }
     }
 
     private async Execute(command: ArchiveCommand): Promise<unknown> {
         if (!this.repository) {
+            await this.bootstrapSafety.Check([{ slot: 'bootstrap', path: app.getPath('userData'), location: 'database', bytes: 0n }]);
+            const browser = this.window.webContents.session.getStoragePath();
+            if (!browser) throw new ArchiveStorageError({ code: 'unmeasurable', location: 'browser-profile' });
             this.repository = new ArchiveRepository(path.join(app.getPath('userData'), 'archive', 'state.sqlite'));
-            this.files = new ArchiveFiles(this.repository);
+            this.storage = new ArchiveStorageController(this.repository, { profile: app.getPath('userData'), browser,
+                staging: this.repository.StagingDirectory, scratch: app.getPath('temp') }, this.safety);
+            this.files = new ArchiveFiles(this.repository, undefined, this.storage);
+        }
+        // Control receipts and cleanup remain writable from the metadata emergency margin.
+        const metadata = ['archive-catalog-page', 'archive-manifest-begin', 'archive-manifest-batch', 'archive-manifest-end', 'archive-manga-begin', 'archive-chapter-begin', 'register-chapter', 'begin-attempt', 'checkpoint'];
+        if (metadata.includes(command.operation)) {
+            const sessionId = 'sessionId' in command ? command.sessionId : 'attemptId' in command ? String(this.repository.Attempt(command.attemptId).session_id) : undefined;
+            if (sessionId) {
+                let bytes = BigInt(Buffer.byteLength(JSON.stringify(command))) * 8n + 4n * 1024n ** 2n;
+                if (command.operation === 'archive-manifest-end') bytes += this.repository.Work.ManifestStorageEstimate(command.sessionId, command.mangaId);
+                await this.storage.CheckSession(sessionId, bytes);
+            }
         }
         if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
         switch (command.operation) {
+            case 'storage-check': return this.storage.CheckSession(command.sessionId);
+            case 'storage-image': return this.storage.Image(command.attemptId, command.bytes, command.quota);
+            case 'storage-image-preflight': return this.storage.Image(command.attemptId, 64 * 1024 ** 2, command.quota, true);
+            case 'storage-prepare': return this.storage.Prepare(command.attemptId, command.bytes);
+            case 'storage-release': return this.storage.ReleaseAttempt(command.attemptId);
             case 'choose-root': {
                 const selection = await dialog.showOpenDialog(this.window, { properties: ['openDirectory', 'createDirectory'] });
                 return selection.canceled || !selection.filePaths[0] ? null : this.repository.GrantRoot(selection.filePaths[0]);

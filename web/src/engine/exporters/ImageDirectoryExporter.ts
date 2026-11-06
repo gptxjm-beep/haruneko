@@ -1,7 +1,7 @@
 import { MangaExporter } from './MangaExporter';
 import { SanitizeFileName } from '../StorageController';
 import { TaskPool, Priority } from '../taskpool/TaskPool';
-import type { ExportContext } from '../DownloadContract';
+import { ArchiveCapacityError, type ExportContext } from '../DownloadContract';
 import { WriteExportFile } from './WriteExportFile';
 
 export class ImageDirectoryExporter extends MangaExporter {
@@ -20,7 +20,7 @@ export class ImageDirectoryExporter extends MangaExporter {
         }, Priority.Normal, context?.signal));
 
         const results = await Promise.allSettled(promises);
-        const failure = results.find(result => result.status === 'rejected');
+        const failure = results.find(result => result.status === 'rejected' && result.reason instanceof ArchiveCapacityError) ?? results.find(result => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
     }
 }

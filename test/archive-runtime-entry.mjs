@@ -9,6 +9,7 @@ import { ArchiveRepository } from '../app/electron/src/archive/ArchiveRepository
 import { ArchiveFiles } from '../app/electron/src/archive/ArchiveFiles.ts';
 import { MigrateArchiveDatabase } from '../app/electron/src/archive/ArchiveSchema.ts';
 import { RelativePath } from '../app/electron/src/archive/ArchivePaths.ts';
+import { ProbeArchiveVolume, DefaultArchiveStoragePolicy } from '../app/electron/src/archive/ArchiveStorageSafety.ts';
 
 const registration = (chapterId = 'chapter', trusted = false) => ({ siteId: 'site', mangaId: 'manga', chapterId, title: 'Same title', position: 0,
     orderConfidence: 'connector-contract', orderEvidence: 'Fixture source order', expectedPages: 1, expectedPagesTrusted: trusted,
@@ -99,6 +100,18 @@ if (process.argv[2] === 'crash-child') {
         await test(); passed++;
         console.log(`PASS ${name}`);
     }
+
+    await check('The installed Electron measures free and caller-usable filesystem capacity', async () => {
+        const f = await fixture();
+        try {
+            const sample = await ProbeArchiveVolume(f.root);
+            const stage = await ProbeArchiveVolume(f.repository.StagingDirectory);
+            assert.equal(typeof sample.usableBytes, 'bigint');
+            assert.ok(sample.freeBytes >= sample.usableBytes);
+            assert.equal(sample.volume, stage.volume);
+            assert.equal(DefaultArchiveStoragePolicy.reserveBytes, 50n * 1024n ** 3n);
+        } finally { await f.close(); }
+    });
 
     await check('SQLite is supported by the installed Electron runtime', async () => {
         assert.equal(process.versions.electron, '45.2.2');
@@ -294,7 +307,7 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 4);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 5);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });

@@ -37,6 +37,8 @@ export class ArchiveManager {
     private cancellation = new AbortController();
     private wake = new AbortController();
     private active?: DownloadHandle;
+    private currentWork?: { mangaId: string; chapterId: string };
+    private resumeStorage = false;
 
     constructor(private readonly site: MangaPlugin, private readonly downloads: DownloadManager, private readonly client: ArchiveClient,
         public readonly SessionId: string, private readonly policy: ArchivePolicy = DefaultArchivePolicy, private readonly dependencies: ArchiveManagerDependencies = {}) {
@@ -51,6 +53,7 @@ export class ArchiveManager {
         if (this.running) return this.completion!;
         this.running = true;
         this.requested = undefined;
+        this.currentWork = undefined;
         this.cancellation = new AbortController();
         this.wake = new AbortController();
         this.completion = this.Run().finally(() => { this.running = false; this.active = undefined; });
@@ -98,6 +101,7 @@ export class ArchiveManager {
     }
 
     private async Capacity(phase: ArchiveCapacityCheckpoint['phase']) {
+        await this.client.Request({ operation: 'storage-check', sessionId: this.SessionId });
         await this.dependencies.beforeCapacity?.({ phase, sessionId: this.SessionId, signal: this.cancellation.signal });
         this.cancellation.signal.throwIfAborted();
     }
@@ -142,7 +146,7 @@ export class ArchiveManager {
                 await this.Command({ operation: 'archive-catalog-end', sessionId: this.SessionId, index: coverage });
                 return;
             } catch(error) {
-                if (error instanceof ArchivePersistenceError) throw error;
+                if (error instanceof ArchivePersistenceError || error instanceof ArchiveCapacityError) throw error;
                 if (this.requested === 'cancelled' && (error === this.cancellation.signal.reason || error instanceof DOMException && error.name === 'AbortError')) return;
                 const failure = ClassifyArchiveError(error);
                 await this.Command({ operation: 'archive-catalog-failed', sessionId: this.SessionId, reason: failure.reason });
@@ -186,7 +190,7 @@ export class ArchiveManager {
             await this.Command({ operation: 'archive-manifest-end', sessionId: this.SessionId, mangaId: manga.Identifier, manifestId });
             return true;
         } catch(error) {
-            if (error instanceof ArchivePersistenceError || this.requested) throw error;
+            if (error instanceof ArchivePersistenceError || error instanceof ArchiveCapacityError || this.requested) throw error;
             const failure = ClassifyArchiveError(error);
             await this.Command({ operation: 'archive-manga-defer', sessionId: this.SessionId, mangaId: manga.Identifier, reason: failure.reason, retryable: failure.retryable });
             return false;
@@ -197,7 +201,12 @@ export class ArchiveManager {
         const report = async (state: 'healthy' | 'review' | 'failed' | 'pending', reason: string, retryable = false) => {
             await this.Command({ operation: 'archive-chapter-result', sessionId: this.SessionId, mangaId: manga.Identifier, chapterId: item.id, state, reason, retryable });
         };
-        const recovery = await this.client.Request<ArchiveRecovery>({ operation: 'recover-chapter', sessionId: this.SessionId, chapterKey: item.chapter_key });
+        await this.client.Request({ operation: 'storage-check', sessionId: this.SessionId });
+        let recovery = await this.client.Request<ArchiveRecovery>({ operation: 'recover-chapter', sessionId: this.SessionId, chapterKey: item.chapter_key });
+        if (this.resumeStorage && recovery.action === 'publish-staged') {
+            for (const file of recovery.files) if (file.state === 'staged') await this.client.Request({ operation: 'publish-staged', fileId: file.fileId });
+            recovery = await this.client.Request<ArchiveRecovery>({ operation: 'recover-chapter', sessionId: this.SessionId, chapterKey: item.chapter_key });
+        }
         if (recovery.action === 'reuse') { await report('healthy', recovery.cleanup.length || recovery.stagingCleanup.length ? 'Verified output reused; independent cleanup remains pending' : 'Verified output reused'); return true; }
         if (recovery.action !== 'retry-missing') { await report('review', `Recovery requires ${recovery.action}; local state ${recovery.localState}`); return true; }
         if (item.attempts >= this.policy.maxAttempts) { await report('review', 'Chapter retry budget exhausted; missing output requires review'); return true; }
@@ -218,9 +227,9 @@ export class ArchiveManager {
             this.active = submitted.handle;
             const result = await submitted.handle.completion;
             this.active = undefined;
-            if (result.errors.some(error => error.stage === 'repository')) throw new ArchivePersistenceError('Chapter receipt could not be committed');
             const capacityFailure = result.errors.find(error => error.error instanceof ArchiveCapacityError);
             if (capacityFailure) throw capacityFailure.error;
+            if (result.errors.some(error => error.stage === 'repository')) throw new ArchivePersistenceError('Chapter receipt could not be committed');
             const after = await this.client.Request<ArchiveRecovery>({ operation: 'recover-chapter', sessionId: this.SessionId, chapterKey: item.chapter_key });
             if (result.outcome === 'cancelled') { await report('pending', 'Cancelled owned attempt; existing output preserved'); return true; }
             if (item.expected_trusted && item.expected_pages !== result.fetch.receivedPages) { await report('review', `page-count-mismatch: trusted ${item.expected_pages}, received ${result.fetch.receivedPages}`); return true; }
@@ -239,7 +248,8 @@ export class ArchiveManager {
     private async Run(): Promise<ArchiveRunSnapshot> {
         const session = await this.client.Request<{ site_id: string }>({ operation: 'session', sessionId: this.SessionId });
         if (session.site_id !== this.site.Identifier) throw new Error('Session belongs to a different site');
-        await this.Command({ operation: 'archive-run-open', sessionId: this.SessionId, policy: this.policy });
+        const opened = await this.Command<ArchiveRunSnapshot>({ operation: 'archive-run-open', sessionId: this.SessionId, policy: this.policy });
+        this.resumeStorage = !!opened.storageError;
         let state: 'limited' | 'review' | 'drained' | 'failed' = 'review';
         let reason = 'Observed work drained; no site-completeness inference';
         try {
@@ -265,7 +275,9 @@ export class ArchiveManager {
                 while (!this.requested) {
                     const item = await this.Command<ArchiveWorkItem | null>({ operation: 'archive-next-chapter', sessionId: this.SessionId, mangaId: next.id, now: Date.now() });
                     if (!item) break;
+                    this.currentWork = { mangaId: next.id, chapterId: item.id };
                     if (!await this.Chapter(manga, item)) { state = 'limited'; reason = 'Cumulative development chapter limit reached'; break; }
+                    this.currentWork = undefined;
                     await this.Refresh();
                 }
                 if (state === 'limited' || this.requested) break;
@@ -273,6 +285,13 @@ export class ArchiveManager {
                 await this.Command({ operation: 'archive-manga-end', sessionId: this.SessionId, mangaId: next.id });
             }
         } catch(error) {
+            if (error instanceof ArchiveCapacityError && this.requested !== 'cancelled') {
+                try {
+                    await this.Command({ operation: 'archive-storage-stop', sessionId: this.SessionId, ...this.currentWork,
+                        fault: error.Fault ?? { code: 'unmeasurable', location: 'archive' } });
+                    return await this.Refresh();
+                } catch(persistenceError) { throw new AggregateError([error, persistenceError], 'Archive storage stopped; pause receipt could not be saved', { cause: error }); }
+            }
             state = 'failed'; reason = error instanceof Error ? error.message : String(error);
             if (!this.requested) {
                 // Fail closed. If SQLite is unavailable this commit can fail too; reopening marks the run interrupted.

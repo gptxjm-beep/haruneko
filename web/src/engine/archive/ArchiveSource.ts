@@ -38,9 +38,8 @@ export class EngineArchiveSource implements ArchiveSource {
 
     public async *Catalog(signal: AbortSignal): AsyncIterable<ArchiveCatalogPage> {
         signal.throwIfAborted();
-        await this.site.Update();
+        const entries = await this.site.FetchArchiveEntries();
         signal.throwIfAborted();
-        const entries = this.site.Entries.Value;
         if (!entries.length) yield { items: [], terminal: true, coverage: { state: 'unknown', evidence: 'Empty connector index requires review' } };
         for (let offset = 0; offset < entries.length; offset += 50) {
             signal.throwIfAborted();

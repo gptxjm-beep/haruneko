@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 4;
+export const ArchiveSchemaVersion = 5;
 
 const migrations = [
     `
@@ -70,6 +70,7 @@ const migrations = [
       position INTEGER NOT NULL,payload TEXT NOT NULL,conflict INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,manga_id,id),
       FOREIGN KEY(session_id,manga_id) REFERENCES archive_manifests(session_id,manga_id));
      CREATE INDEX archive_manifest_order ON archive_manifest_entries(session_id,manga_id,position,id);`,
+    `ALTER TABLE archive_runs ADD COLUMN storage_error TEXT;`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

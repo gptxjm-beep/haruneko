@@ -142,6 +142,12 @@ export class MangaPlugin extends MediaContainer<Manga> {
         await this.storageController.SavePersistent(mangas, Store.MediaLists, this.Identifier);
         return entries;
     }
+
+    /** Archive discovery uses the engine scraper without writing an unbudgeted UI cache into IndexedDB. */
+    public async FetchArchiveEntries(): Promise<Manga[]> {
+        await this.Initialize();
+        return this.scraper.FetchMangas(this);
+    }
 }
 
 export class Manga extends MediaContainer<Chapter> {

@@ -1,4 +1,5 @@
 /** Development-only bounds, enforced again in the main process. No unlimited mode. */
+import type { ArchiveStorageFault } from './ArchiveStorageContract';
 export const ArchiveDevelopmentLimits = Object.freeze({ mangas: 5, chapters: 20, catalogPages: 20, pageItems: 100, chapterBatchSize: 200 });
 export interface ArchivePolicy {
     maxMangas: number;
@@ -23,8 +24,10 @@ export interface ArchiveRunSnapshot {
     index: ArchiveEvidence; mangasUsed: number; chaptersStarted: number; reason: string; catalogAttempts: number;
     counts: Record<string, number>; nextRetry: number | null;
     catalogState: 'idle' | 'fetching' | 'paused' | 'interrupted' | 'cancelled' | 'failed' | 'finished';
+    storageError: ArchiveStorageFault | null;
 }
 export type ArchiveCoordinatorCommand =
+    | { operation: 'archive-storage-stop'; sessionId: string; fault: ArchiveStorageFault; mangaId?: string; chapterId?: string }
     | { operation: 'archive-run-open'; sessionId: string; policy: ArchivePolicy }
     | { operation: 'archive-run-state'; sessionId: string; state: ArchiveRunState; reason: string }
     | { operation: 'archive-run-snapshot'; sessionId: string }

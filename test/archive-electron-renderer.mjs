@@ -112,6 +112,39 @@
     const longState = await longManager.Start();
     record('Native IPC registers all 364 chapters but exports only twenty', longState.state === 'limited' && longState.counts.healthy === 20 && longState.counts.pending === 344);
     record('Long native manga retains oldest-first order across SQLite batches', visited.slice(beforeLong).join(',') === Array.from({ length: 20 }, (_, index) => `long-manager/c${index}`).join(','));
+    const storageSession = await client.Request({ operation: 'create-session', rootId: grant.rootId, siteId: 'site', siteName: 'Site', settings });
+    const storageSource = { site: plugin,
+        Catalog: async function* () { yield { items: [{ id: 'storage-manager', title: 'Storage Manager' }], terminal: true, coverage: { state: 'unknown', evidence: 'Isolated capacity fixture' } }; },
+        Chapters: async () => ({ chapters: [{ id: 'only', title: 'Only', position: 0, language: null }], order: 'ascending', orderEvidence: 'Fixture', coverage: { state: 'unknown', evidence: '' } }),
+    };
+    const storageManager = new ArchiveManager(plugin, manager, client, storageSession, { ...policy, maxMangas: 1, maxChapters: 2 }, { source: storageSource });
+    const beforeStorage = visited.length;
+    await ipcRenderer.invoke('ArchiveStorageTest::Capacity', 'low');
+    const storageStopped = await storageManager.Start();
+    record('Native storage shortage pauses the session with a structured reason before fetching', storageStopped.state === 'paused' && storageStopped.storageError.code === 'low-space' && visited.length === beforeStorage);
+    const manualMedia = { Identifier: 'manual-storage-control', Entries: { Value: [{ Fetch: async () => image }] },
+        Update: async () => {}, IsSameAs: () => false, Store: async (_resources, options) => {
+            await options.context.begin(1);
+            options.context.writing('manual-fixture.bin');
+            options.context.written({ path: 'manual-fixture.bin', size: image.size, handle: { getFile: async () => image } });
+        } };
+    const manualHandle = await manager.EnqueueTask(manualMedia, { owner: 'manual', retention: 'release' });
+    record('Manual engine download remains independent of the archive reserve', (await manualHandle.completion).outcome === 'succeeded');
+    await ipcRenderer.invoke('ArchiveStorageTest::Capacity', 'enough');
+    const storageResumed = await storageManager.Resume();
+    record('Native session resumes after capacity is restored without resetting the development budget', storageResumed.counts.healthy === 1 && storageResumed.storageError === null && storageResumed.chaptersStarted === 1);
+    const stagedSession = await client.Request({ operation: 'create-session', rootId: grant.rootId, siteId: 'site', siteName: 'Site', settings });
+    const stagedSource = { ...storageSource, Catalog: async function* () {
+        yield { items: [{ id: 'staged-storage', title: 'Staged Storage' }], terminal: true, coverage: { state: 'unknown', evidence: 'Isolated staged publication fixture' } };
+    } };
+    const stagedManager = new ArchiveManager(plugin, manager, client, stagedSession, { ...policy, maxMangas: 1, maxChapters: 2 }, { source: stagedSource });
+    const beforeStaged = visited.length;
+    await ipcRenderer.invoke('ArchiveStorageTest::BlockPublication');
+    const blockedPublication = await stagedManager.Start();
+    record('Low space before native publication preserves the staged chapter and pauses', blockedPublication.state === 'paused' && blockedPublication.storageError.code === 'low-space' && visited.length === beforeStaged + 1);
+    await ipcRenderer.invoke('ArchiveStorageTest::Capacity', 'enough');
+    const publishedAfterResume = await stagedManager.Resume();
+    record('Restored capacity publishes a verified staging receipt without downloading its images again', publishedAfterResume.counts.healthy === 1 && publishedAfterResume.chaptersStarted === 1 && visited.length === beforeStaged + 1);
     for (let retry = 0; manager.Queue.Value.length && retry < 50; retry++) await new Promise(resolve => setTimeout(resolve, 10));
     record('Completed archive tasks do not remain in manager history', manager.Queue.Value.length === 0);
     return checks;
