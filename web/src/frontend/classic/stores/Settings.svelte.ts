@@ -1,3 +1,4 @@
+import { CreateArabicFirstSetting } from '../models/PluginPresentation';
 import { type LocaleID, FrontendResourceKey as R } from '../../../i18n/ILocale';
 import { Check, Choice, Numeric} from '../../../engine/SettingsManager';
 import { LoadSettingStore, SettingCountStore, SettingStore } from './storesHelpers.svelte';
@@ -46,6 +47,7 @@ export async function Initialize(): Promise<void> {
         Settings.SidenavTrail.Setting,
         Settings.SidenavIconsOnTop.Setting,
         Settings.FuzzySearch.Setting,
+        Settings.ArabicFirstPlugins.Setting,
         Settings.StartupGuideEnabled.Setting,
     );
 
@@ -91,6 +93,8 @@ class UIClassicStore {
         R.Frontend_Classic_Settings_SidenavIconsOnTopInfo,
         false
     ));
+
+    ArabicFirstPlugins = new SettingStore<boolean, Check>(CreateArabicFirstSetting());
 
     FuzzySearch= new SettingStore<boolean, Check>(new Check(
         Key.FuzzySearch,

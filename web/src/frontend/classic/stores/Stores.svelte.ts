@@ -4,6 +4,7 @@ import type { IAppWindow } from '../../../engine/platform/AppWindow';
 import { Settings } from './Settings.svelte';
 
 class UIClassicStore {
+    page: 'media' | 'arabic-manga' = $state('media');
     WindowController:IAppWindow = $state();
     selectedPlugin: MediaContainer<MediaChild> = $state(HakuNeko.BookmarkPlugin);
     selectedMedia: MediaContainer<MediaChild> = $state(null);

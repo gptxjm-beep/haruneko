@@ -69,6 +69,7 @@
                 tooltipPosition="bottom"
                 tooltipAlignment="center"
                 on:click={() => {
+                    UI.page = 'media';
                     UI.selectedPlugin = window.HakuNeko.BookmarkPlugin;
                     UI.selectedMedia = undefined;
                     UI.selectedItem = undefined;

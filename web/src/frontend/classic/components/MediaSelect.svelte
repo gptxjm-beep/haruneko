@@ -24,6 +24,8 @@
     import VirtualList from '../lib/VirtualList.svelte';
     // UI : Stores
     import {Store as UI } from '../stores/Stores.svelte';
+    import PluginOrder from './arabic-manga/PluginOrder.svelte';
+    import { OrderPlugins, OpenPlugin } from '../models/PluginPresentation';
     import { Settings } from '../stores/Settings.svelte';
     // Hakuneko Engine
     import type {
@@ -49,16 +51,8 @@
         value: MediaContainer<MediaChild>;
         isFavorite: boolean;
     }
-    const orderedPlugins: MediaContainer<MediaChild>[] = HakuNeko.PluginController.WebsitePlugins.toSorted((a, b) => {
-            return (
-                // sort by favorite
-                (pluginsFavorites.includes(a.Identifier) ? 0 : 1) -
-                    (pluginsFavorites.includes(b.Identifier) ? 0 : 1) ||
-                //sort by string
-                a.Title.localeCompare(b.Title)
-            );
-        });
-    const pluginsCombo: ComboBoxItemWithValue[] = [
+    let orderedPlugins = $derived(OrderPlugins(HakuNeko.PluginController.WebsitePlugins, Settings.ArabicFirstPlugins.Value, pluginsFavorites));
+    let pluginsCombo: ComboBoxItemWithValue[] = $derived([
         {
             id: HakuNeko.BookmarkPlugin.Identifier,
             text: HakuNeko.BookmarkPlugin.Title,
@@ -73,7 +67,7 @@
                 isFavorite: pluginsFavorites.includes(plugin.Identifier),
             };
         }),
-    ];
+    ]);
 
     let pluginDropdownSelected: string = $state();
 
@@ -186,9 +180,9 @@
     }
 
     async function selectPlugin(item: string) {
-        UI.selectedPlugin = [HakuNeko.BookmarkPlugin, ...orderedPlugins].find(
-            (plugin) => plugin.Identifier === item,
-        );
+        const plugin = [HakuNeko.BookmarkPlugin, ...orderedPlugins].find(value => value.Identifier === item);
+        // Carbon may emit select while synchronizing the existing selection on mount.
+        if (plugin && UI.selectedPlugin?.Identifier !== plugin.Identifier) OpenPlugin(UI, plugin);
     }
 
     let medialistref : HTMLElement = $state();
@@ -219,6 +213,7 @@
             onclick={onMediaPasteURL}
         />
     </div>
+    <div id="PluginOrder"><PluginOrder /></div>
     <div id="Plugin">
         <ComboBox
             id="PluginSelect"
@@ -301,10 +296,11 @@
         height: 100%;
         display: grid;
         grid-template-columns: 1fr 4px;
-        grid-template-rows: 2.2em 2.2em 2.2em 1fr 2em;
+        grid-template-rows: 2.2em 2.2em 2.2em 2.2em 1fr 2em;
         gap: 0.3em 0.3em;
         grid-template-areas:
             'MediaTitle Empty'
+            'PluginOrder Resize'
             'Plugin Resize'
             'MediaFilter Resize'
             'MediaList Resize'
@@ -312,6 +308,7 @@
         grid-area: Media;
         min-width: 22em;
     }
+    #PluginOrder { grid-area: PluginOrder; }
     #Plugin {
         grid-area: Plugin;
         display: grid;

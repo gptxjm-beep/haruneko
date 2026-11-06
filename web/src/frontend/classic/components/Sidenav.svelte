@@ -75,6 +75,7 @@
                 text={'Bookmarks'}
                 icon={Bookmark}
                 onclick={() => {
+                    UI.page = 'media';
                     UI.selectedPlugin = window.HakuNeko.BookmarkPlugin;
                     UI.selectedMedia = undefined;
                     UI.selectedItem = undefined;
@@ -84,14 +85,18 @@
         <SideNavLink
             text={'Paste Media URL'}
             icon={CopyLink}
-            onclick={() =>
-                document.dispatchEvent(new Event('media-paste-url'))}
+            onclick={() => {
+                UI.page = 'media';
+                document.dispatchEvent(new Event('media-paste-url'));
+            }}
         />
         <SideNavLink
             text="Archive Site"
             icon={ImportExport}
             onclick={() => (isArchiveModalOpen = true)}
         />
+        <SideNavLink text="Arabic Manga" icon={PlugFilled} isSelected={UI.page === 'arabic-manga'} onclick={() => { UI.page = 'arabic-manga'; isOpen = false; }} />
+        <SideNavLink text="Media List" icon={Home} onclick={() => { UI.page = 'media'; isOpen = false; }} />
         {#if import.meta.env.VITE_ENHANCED_PREVIEW === '1'}
             <SideNavLink text="Image Diagnostics (Preview)" icon={Debug} onclick={() => (isImageDiagnosticsOpen = true)} />
         {/if}

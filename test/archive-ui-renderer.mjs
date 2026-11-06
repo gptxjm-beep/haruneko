@@ -15,8 +15,11 @@
     const record = (name, passed) => { if (!passed) throw new Error(name); checks.push({ name, passed }); console.log(name, passed); };
     const wait = async (predicate, label) => { const end = Date.now() + 15000; while (!await predicate()) { if (Date.now() > end) throw new Error(`Timeout: ${label}; ${document.body.innerText.slice(-2000)}`); await new Promise(resolve => setTimeout(resolve, 40)); } };
     const click = async text => { const element = [...document.querySelectorAll('button,a')].find(element => element.textContent.trim() === text && element.checkVisibility()); if (!element) throw new Error(`Missing visible action ${text}`); element.click(); await tick(); };
+    const { StorageControllerBrowser } = await import('/src/engine/StorageControllerBrowser.ts');
+    const { Store } = await import('/src/engine/StorageController.ts');
+    const browserStorage = new StorageControllerBrowser();
     const persistent = new Map(); const temporary = new Map();
-    const storage = { SavePersistent: async (value, store, id) => persistent.set(`${store}:${id}`, value), LoadPersistent: async (store, id) => persistent.get(`${store}:${id}`),
+    const storage = { SavePersistent: async (value, store, id) => store === Store.Settings ? browserStorage.SavePersistent(value, store, id) : persistent.set(`${store}:${id}`, value), LoadPersistent: async (store, id) => store === Store.Settings ? browserStorage.LoadPersistent(store, id) : persistent.get(`${store}:${id}`),
         SaveTemporary: async data => { const id = crypto.randomUUID(); temporary.set(id, data); return id; }, LoadTemporary: async id => temporary.get(id), RemoveTemporary: async (...keys) => keys.forEach(key => temporary.delete(key)) };
     const settings = new SettingsManager(storage);
     await Initialize(settings, []);
@@ -109,8 +112,9 @@
     await wait(async () => (await controller.Progress(id)).snapshot.state === 'cancelled', 'cancelled monitor');
     record('Cancel changes only the chosen archive session and preserves prior verified output', (await controller.Progress(id)).snapshot.state === 'cancelled' && (await controller.Progress(session.id)).verifiedChapters === 1);
     await unmount(view); target.replaceChildren();
-    mount(SettingsModal, { target, props: { isSettingsModalOpen: true, selectedTab: 4 } });
+    const finalSettings = mount(SettingsModal, { target, props: { isSettingsModalOpen: true, selectedTab: 4 } });
     await wait(() => document.querySelector('[data-testid="archive-progress"]'), 'final settings monitor');
     globalThis.archiveUIFixture = { id: session.id, rootId: next.rootId };
+    await unmount(finalSettings); target.remove();
     return checks;
 })()

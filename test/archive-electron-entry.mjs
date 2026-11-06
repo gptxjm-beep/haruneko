@@ -40,6 +40,13 @@ try {
             }
             return { ...observed, freeBytes: available, usableBytes: available };
         } });
+    ipcMain.handle('ArchiveHubTest::Capture', async () => {
+        if (process.env.HARUNEKO_HUB_TEST_SCREENSHOT) {
+            window.showInactive();
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await fs.writeFile(process.env.HARUNEKO_HUB_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
+        }
+    });
     window.webContents.on('console-message', event => console.log('renderer:', event.message));
     console.log('Loading isolated renderer');
     await window.loadURL(url);
@@ -49,6 +56,8 @@ try {
     for (const check of checks) assert.equal(check.passed, true, check.name);
     const uiChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARCHIVE_UI_TEST_SCRIPT, 'utf8'));
     for (const check of uiChecks) assert.equal(check.passed, true, check.name);
+    const hubChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARABIC_HUB_TEST_SCRIPT, 'utf8'));
+    for (const check of hubChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
     for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
     if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
@@ -65,6 +74,15 @@ try {
         const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
         return { progress: await client.Request({ operation: 'ui-progress', sessionId: '${fixture.id}' }), preferences: await client.Request({ operation: 'ui-preferences' }) };
     })()`);
+    const restoredOrder = await window.webContents.executeJavaScript(`(async () => {
+        const { StorageControllerBrowser } = await import('/src/engine/StorageControllerBrowser.ts');
+        const { SettingsManager } = await import('/src/engine/SettingsManager.ts');
+        const { CreateArabicFirstSetting } = await import('/src/frontend/classic/models/PluginPresentation.ts');
+        const setting = CreateArabicFirstSetting();
+        await new SettingsManager(new StorageControllerBrowser()).OpenScope('frontend.classic').Initialize(setting);
+        return setting.Value;
+    })()`);
+    assert.equal(restoredOrder, false, 'Classic ordering preference survives a real renderer reload in isolated IndexedDB');
     assert.equal(afterReload.progress.snapshot.state, 'interrupted', 'Renderer replacement must interrupt orphan runs without auto-resume');
     assert.equal(afterReload.progress.snapshot.chaptersStarted, beforeReload, 'Renderer replacement must preserve the cumulative budget');
     assert.equal(afterReload.preferences.preferences.policy.delayMs, 2000);
@@ -74,7 +92,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + priorityChecks.length + 6} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + hubChecks.length + priorityChecks.length + 7} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);

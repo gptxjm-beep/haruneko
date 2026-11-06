@@ -29,7 +29,9 @@
     } from '../../../engine/providers/MediaPlugin';
     import SettingsViewer from './settings/SettingsViewer.svelte';
     // UI : Stores
-    import { GlobalSettings } from '../stores/Settings.svelte';
+    import PluginOrder from './arabic-manga/PluginOrder.svelte';
+    import { OrderPlugins, OpenPlugin } from '../models/PluginPresentation';
+    import { GlobalSettings, Settings as ClassicSettings } from '../stores/Settings.svelte';
     import { Store as UI } from '../stores/Stores.svelte';
     // Hakuneko Engine
     import { TagCategoryResourceKey as R } from '../../../i18n/ILocale';
@@ -71,7 +73,7 @@
     }
 
     let filterFavorites = $state(false);
-    let filteredPluginlist: ReturnType<typeof createDataRow>[] = $derived(HakuNeko.PluginController.WebsitePlugins.filter(
+    let filteredPluginlist: ReturnType<typeof createDataRow>[] = $derived(OrderPlugins(HakuNeko.PluginController.WebsitePlugins, ClassicSettings.ArabicFirstPlugins.Value).filter(
             (plugin) => {
                 let rejectconditions: Array<boolean> = [];
                 if (
@@ -115,6 +117,7 @@
     on:close
     hasForm
 >
+    <PluginOrder />
     <div class="content tags">
         <Tile>
             <div class="lang">
@@ -178,7 +181,7 @@
         page={page}
         rows={filteredPluginlist}
         on:click:row={event => {
-            UI.selectedPlugin = event.detail.row.overflow;
+            OpenPlugin(UI, event.detail.row.overflow);
             isPluginModalOpen = false;
         }}
     >

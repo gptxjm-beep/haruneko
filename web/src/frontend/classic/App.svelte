@@ -10,6 +10,7 @@
 
     // UI: Components
     import Theme from './components/Theme.svelte';
+    import ArabicManga from './components/arabic-manga/ArabicManga.svelte';
     import MediaSelect from './components/MediaSelect.svelte';
     import MediaItemSelect from './components/MediaItemSelect.svelte';
     import DownloadsStatus from './components/DownloadManagerStatus.svelte';
@@ -45,6 +46,7 @@
 <Theme theme={Settings.Theme.Value}>
     <AppBar
         onHome={() => {
+            UI.page = 'media';
             UI.selectedItem = null;
             UI.contentscreen = '/';
         }}
@@ -52,8 +54,11 @@
 
     <Content
         id="hakunekoapp"
-        class={Settings.ContentPanel.Value ? 'ui-mode-content' : 'ui-mode-download'}
+        class={UI.page === 'arabic-manga' ? 'ui-mode-hub' : Settings.ContentPanel.Value ? 'ui-mode-content' : 'ui-mode-download'}
     >
+        {#if UI.page === 'arabic-manga'}
+            <div id="Hub"><ArabicManga /></div>
+        {/if}
         <MediaSelect />
         <MediaItemSelect />
         {#if Settings.ContentPanel.Value}
@@ -104,6 +109,12 @@
             'Bottom Bottom';
     }
 
+    :global(.ui-mode-hub) {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: 'Hub' 'Bottom';
+    }
+    :global(.ui-mode-hub #Media), :global(.ui-mode-hub #Item), :global(.ui-mode-hub #Content) { display: none; }
+    #Hub { grid-area: Hub; overflow: hidden; min-height: 0; }
     #Content {
         grid-area: Content;
         overflow-y: auto;

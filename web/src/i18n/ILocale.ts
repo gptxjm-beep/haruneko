@@ -146,6 +146,8 @@ export enum FrontendResourceKey {
     Frontend_Classic_Product_Description_Short = 'Frontend_Classic_Product_Description_Short',
     Frontend_Classic_Product_Description_Long1 = 'Frontend_Classic_Product_Description_Long1',
     Frontend_Classic_Product_Description_Long2 = 'Frontend_Classic_Product_Description_Long2',
+    Frontend_Classic_Settings_ArabicFirst = 'Frontend_Classic_Settings_ArabicFirst',
+    Frontend_Classic_Settings_ArabicFirstInfo = 'Frontend_Classic_Settings_ArabicFirstInfo',
     Frontend_Classic_Settings_FuzzySearch = 'Frontend_Classic_Settings_FuzzySearch',
     Frontend_Classic_Settings_FuzzySearchInfo = 'Frontend_Classic_Settings_FuzzySearchInfo',
     Frontend_Classic_Settings_Theme = 'Frontend_Classic_Settings_Theme',
