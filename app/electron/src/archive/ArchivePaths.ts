@@ -39,8 +39,15 @@ export function IsWithin(root: string, candidate: string): boolean {
 /** No renderer-controlled absolute path, symlink, junction or non-directory parent is accepted. */
 export async function ResolveArchivePath(root: string, relative: string, createParents = false): Promise<string> {
     const parts = RelativePath(relative).split('/');
+    const before = await lstat(root, { bigint: true });
+    if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('Archive root changed');
     const canonical = await realpath(root);
-    if (canonical !== root) throw new Error('Archive root changed');
+    const [resolved, after] = await Promise.all([lstat(canonical, { bigint: true }), lstat(root, { bigint: true })]);
+    // Native Windows realpath can expand short names and normalize casing. Directory identity,
+    // not textual spelling or lowercasing, proves that normalization stayed on the same object.
+    if (!resolved.isDirectory() || resolved.isSymbolicLink() || !after.isDirectory() || after.isSymbolicLink()
+        || before.dev !== resolved.dev || before.ino !== resolved.ino || before.dev !== after.dev || before.ino !== after.ino) throw new Error('Archive root changed');
+    root = canonical;
     let current = root;
     for (const part of parts.slice(0, -1)) {
         current = path.join(current, part);

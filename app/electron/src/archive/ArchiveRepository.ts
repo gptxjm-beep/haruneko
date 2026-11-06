@@ -23,9 +23,10 @@ export class ArchiveRepository {
 
     constructor(private readonly filename: string) {
         fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-        this.StagingDirectory = path.join(path.dirname(filename), 'staging');
-        fs.mkdirSync(this.StagingDirectory, { recursive: true, mode: 0o700 });
-        if (fs.lstatSync(this.StagingDirectory).isSymbolicLink()) throw new Error('Unsafe staging directory');
+        const staging = path.join(path.dirname(filename), 'staging');
+        fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+        if (fs.lstatSync(staging).isSymbolicLink()) throw new Error('Unsafe staging directory');
+        this.StagingDirectory = fs.realpathSync.native(staging);
         if (fs.existsSync(filename) && fs.lstatSync(filename).isSymbolicLink()) throw new Error('Unsafe database path');
         this.AcquireLock();
         try {
@@ -89,12 +90,14 @@ export class ArchiveRepository {
     }
 
     public GrantRoot(nativePath: string): { rootId: string; label: string } {
-        const canonical = fs.realpathSync(Text(nativePath, 'selected directory', 8192));
+        const canonical = fs.realpathSync.native(Text(nativePath, 'selected directory', 8192));
         const stat = fs.statSync(canonical, { bigint: true });
         if (!stat.isDirectory()) throw new Error('Archive root is not a directory');
         const identity = `${stat.dev}:${stat.ino}`;
         for (const root of this.database.prepare('SELECT * FROM roots').all()) {
-            if (root.path === canonical) {
+            let existing = String(root.path);
+            try { existing = fs.realpathSync.native(existing); } catch { /* A disconnected old grant cannot authorize this directory. */ }
+            if (root.path === canonical || existing === canonical) {
                 if (root.identity && root.identity !== identity) throw new Error('Archive root identity changed; review required');
                 if (!root.identity) this.database.prepare('UPDATE roots SET identity=? WHERE id=?').run(identity, root.id);
                 return { rootId: String(root.id), label: String(root.label) };
@@ -125,7 +128,10 @@ export class ArchiveRepository {
         const native = String(root.path);
         const stat = fs.lstatSync(native, { bigint: true });
         if (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== root.identity) throw new Error('Archive root identity changed; review required');
-        return native;
+        const canonical = fs.realpathSync.native(native);
+        const resolved = fs.lstatSync(canonical, { bigint: true });
+        if (!resolved.isDirectory() || resolved.isSymbolicLink() || `${resolved.dev}:${resolved.ino}` !== root.identity) throw new Error('Archive root identity changed; review required');
+        return canonical;
     }
 
     public CreateSession(rootId: string, siteId: string, siteName: string, settings: { format: string; useWebsiteSubDirectory: boolean }): string {

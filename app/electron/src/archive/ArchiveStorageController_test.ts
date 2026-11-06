@@ -13,7 +13,8 @@ const close: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const action of close.splice(0)) await action(); });
 
 async function fixture() {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'haruneko-storage-safety-'));
+    // The injected capacity map must use native physical paths, as the production grants do.
+    const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'haruneko-storage-safety-')));
     const root = path.join(base, 'output');
     const profile = path.join(base, 'profile');
     const browser = path.join(base, 'browser');

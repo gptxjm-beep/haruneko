@@ -196,11 +196,11 @@ export class ArchiveFiles {
     public async Recover(sessionId: string, chapterKey: string, fullAudit = false): Promise<ArchiveRecovery> {
         if (this.HasActive(sessionId)) throw new Error('Recovery cannot run during active writes');
         const data = this.repository.RecoveryData(sessionId, chapterKey);
-        const root = this.repository.RootPath(data.session.root_id);
+        let root = this.repository.RootPath(data.session.root_id);
         const files: ArchiveRecovery['files'] = [];
         const stagingCleanup: string[] = [];
         try {
-            this.repository.VerifyRoot(data.session.root_id);
+            root = this.repository.VerifyRoot(data.session.root_id);
             if (!(await lstat(root)).isDirectory()) throw new Error('Root unavailable');
         } catch {
             this.repository.SetRecovery(sessionId, chapterKey, 'uncertain', 'unknown');
