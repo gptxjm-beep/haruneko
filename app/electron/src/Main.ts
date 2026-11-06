@@ -1,6 +1,9 @@
 import path from 'path';
 import fs from 'fs/promises';
-import { app } from 'electron';
+import { app, dialog, ipcMain } from 'electron';
+import { DatabaseSync } from 'node:sqlite';
+import { PreviewName, PreviewOrigin, PreviewDataDirectory, VerifyPreview, ServePreview } from './preview/PreviewRuntime';
+import { AssertArchiveSender } from './archive/ArchiveIPC';
 import { Command } from 'commander';
 import { Logger } from './Logger';
 import { IPC } from './ipc/InterProcessCommunication';
@@ -38,6 +41,7 @@ function ParseCLI(): CLIOptions {
 
 type Manifest = {
     url: string;
+    enhancedPreview?: boolean;
     'user-agent': undefined | string;
     'user-data-dir': undefined | string;
 };
@@ -103,11 +107,41 @@ async function OpenWindow(): Promise<void> {
         InitializeMenu();
         const argv = ParseCLI();
         const manifest = await LoadManifest();
-        await SetupUserDataDirectory(manifest);
+        if (manifest.enhancedPreview) {
+            app.setName(PreviewName);
+            const directory = PreviewDataDirectory(app.getAppPath());
+            for (const [key, leaf] of Object.entries({ userData: 'profile', sessionData: 'browser', temp: 'temp', logs: 'logs', crashDumps: 'crashes' })) {
+                const target = path.join(directory, leaf); await fs.mkdir(target, { recursive: true });
+                app.setPath(key as Parameters<typeof app.setPath>[0], target);
+            }
+            app.commandLine.removeSwitch('user-data-dir');
+            app.commandLine.removeSwitch('disk-cache-dir');
+            app.commandLine.appendSwitch('disk-cache-dir', path.join(directory, 'browser', 'Cache'));
+            if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+            if (process.platform === 'win32') app.setAppUserModelId('org.haruneko.enhanced.preview');
+        } else await SetupUserDataDirectory(manifest);
         app.userAgentFallback = manifest['user-agent'] ?? app.userAgentFallback.split(/\s+/).filter(segment => !/(hakuneko|electron)/i.test(segment)).join(' ');
         await app.whenReady();
         const win = await CreateApplicationWindow();
-        const uri = new URL(argv.origin ?? manifest.url ?? 'about:blank');
+        let uri: URL;
+        if (manifest.enhancedPreview) {
+            const preview = await VerifyPreview(app.getAppPath());
+            if (preview.electron !== process.versions.electron) throw new Error('Preview Electron version mismatch');
+            const server = await ServePreview(app.getAppPath(), preview);
+            app.once('will-quit', () => { server.closeAllConnections(); server.close(); });
+            win.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== PreviewOrigin) event.preventDefault(); });
+            uri = new URL(PreviewOrigin); // CLI --origin cannot select a hosted or stale UI in Preview.
+            await win.webContents.session.clearCache();
+            await win.webContents.session.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] });
+            const database = new DatabaseSync(':memory:');
+            const sqlite = String(database.prepare('SELECT sqlite_version() AS version').get()!.version); database.close();
+            ipcMain.handle('Preview::Info', event => {
+                AssertArchiveSender(event, win, PreviewOrigin);
+                return { name: PreviewName, commit: preview.commit, dirty: preview.dirty, electron: process.versions.electron, sqlite, localUI: true };
+            });
+            win.on('page-title-updated', event => event.preventDefault());
+            win.setTitle(`${PreviewName} — ${preview.commit.slice(0, 8)}`);
+        } else uri = new URL(argv.origin ?? manifest.url ?? 'about:blank');
         new ArchiveIPC(win, uri.origin);
         UpdatePermissions(win.webContents.session, uri);
 
@@ -121,7 +155,10 @@ async function OpenWindow(): Promise<void> {
         win.RegisterChannels(ipc);
         await win.loadURL(uri.href).catch(error => console.warn(error));
     } catch(error) {
-        console.error(error);
+        if (app.getName() === PreviewName) {
+            console.error('Preview startup failed');
+            dialog.showErrorBox('Preview startup failed', 'Preview requires its complete local bundle and a writable isolated data folder; close other Preview windows and check the bundle.');
+        } else console.error(error);
         app.quit();
     }
 }

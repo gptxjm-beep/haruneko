@@ -1,0 +1,39 @@
+name: Windows Connector Preview
+on:
+  push:
+    branches: [test/windows-connector-validation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable-x64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install pinned repository dependencies
+        run: npm install
+      - name: Unit tests
+        run: npm test
+      - name: Build isolated portable Preview with bundled web UI
+        run: node app/electron/scripts/package-windows-preview.mjs
+      - name: Run the extracted Windows EXE and verify Classic, SQLite, isolation and relaunch
+        shell: pwsh
+        run: |
+          $preview = Get-ChildItem app/electron/bundle/HaruNeko-Enhanced-Preview-*-win-x64-*.zip | Select-Object -First 1
+          if (-not $preview) { throw 'Portable preview ZIP missing' }
+          node test/windows-preview-smoke.mjs --zip $preview.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Preview smoke test failed' }
+      - name: Upload the tested portable Preview, checksum and verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaruNeko-Enhanced-Preview-Windows-x64-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            app/electron/bundle/HaruNeko-Enhanced-Preview-*-win-x64-*.zip
+            app/electron/bundle/HaruNeko-Enhanced-Preview-*-win-x64-*.zip.sha256
+            app/electron/bundle/preview-smoke-win32.json

@@ -16,6 +16,7 @@ declare global {
 }
 
 window.addEventListener('load', async () => {
+    if (import.meta.env.VITE_ENHANCED_PREVIEW === '1') return; // Preview always serves its verified bundled UI; no stale worker cache.
     const registrations = await navigator.serviceWorker.getRegistrations();
     await Promise.allSettled(registrations.map(registration => registration.unregister()));
     const urlServiceWorker = new URL(import.meta.env.DEV ? './service-worker.ts' : '/sw.js', import.meta.url);

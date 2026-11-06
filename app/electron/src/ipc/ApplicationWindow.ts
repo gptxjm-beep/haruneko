@@ -40,7 +40,7 @@ export class ApplicationWindow extends BrowserWindow {
             });
             this.splash.on('closed', () => {
                 this.splash = undefined;
-                super.show();
+                if (!this.isDestroyed()) super.show();
             });
             this.splash.removeMenu();
             this.splash.setMenu(null);
