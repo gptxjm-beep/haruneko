@@ -38,9 +38,20 @@ jobs:
       - name: Native SQLite recovery and process interruption checks
         run: node test/archive-runtime.mjs
       - name: Windows Electron hub and selective-queue integration
+        id: integration
         env:
           HARUNEKO_PRIORITY_CONNECTORS: '1'
-        run: node test/archive-electron.mjs
+        run: node test/windows-electron-integration.mjs
+      - name: Upload sanitized Windows integration checkpoint
+        if: always() && steps.integration.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Electron-integration-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            app/electron/bundle/windows-electron-integration.json
+            app/electron/bundle/windows-electron-integration.log
       - name: Build isolated portable Preview with bundled web UI
         run: node app/electron/scripts/package-windows-preview.mjs
       - name: Run the extracted Windows EXE and verify Classic, SQLite, isolation and relaunch
