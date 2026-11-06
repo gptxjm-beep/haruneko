@@ -70,7 +70,7 @@
     record('Real AJAX HTML extraction retains all 364 available chapter links in newest-first order', chapters.length === 364 && chapters[0].Identifier.endsWith('/364/') && chapters.at(-1).Identifier.endsWith('/1/'));
     const { EngineArchiveSource } = await import('/src/engine/archive/ArchiveSource.ts');
     const manifest = await new EngineArchiveSource(lover.site).Chapters(lover.manga, new AbortController().signal);
-    record('The real 3asq engine adapter retains all fixture chapters and still reports unknown source completeness', manifest.chapters.length === 364 && manifest.order === 'descending' && manifest.coverage.state === 'unknown');
+    record('The real 3asq engine adapter retains all fixture chapters and reports unknown order and source completeness', manifest.chapters.length === 364 && manifest.order === 'unknown' && manifest.coverage.state === 'unknown');
     Respond('https://3asq.online/manga/priority/ajax/chapters/', { body: '<ul><li class="wp-manga-chapter"><a href="https://3asq.online/manga/priority/299/">299</a></li></ul>' });
     record('A sparse chapter number does not invent a larger source list', (await lover.scraper.FetchChapters(lover.manga)).length === 1);
     // A cancelled page request releases its pool worker; retry is a new independent request.

@@ -52,8 +52,10 @@ export class EngineArchiveSource implements ArchiveSource {
         signal.throwIfAborted();
         await manga.Update();
         signal.throwIfAborted();
+        const ordering = manga.ArchiveChapterOrder;
         return { chapters: manga.Entries.Value.map((chapter, position) => ({ id: chapter.Identifier, title: chapter.Title, position, language: ChapterLanguage(chapter, this.site) })),
-            order: 'descending', orderEvidence: 'MangaScraper.FetchChapters guarantees newest-first after connector decorators',
+            order: ['ascending', 'descending'].includes(ordering.order) && ordering.evidence?.trim() ? ordering.order : 'unknown',
+            orderEvidence: ordering.evidence?.trim() || 'Connector chapter direction has not been verified',
             coverage: { state: 'unknown', evidence: 'FetchChapters has no page-manifest completeness evidence' } };
     }
 }

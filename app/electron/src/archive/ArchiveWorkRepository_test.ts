@@ -4,10 +4,10 @@ import { MigrateArchiveDatabase } from './ArchiveSchema';
 import { ArchiveWorkRepository } from './ArchiveWorkRepository';
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 
-function fixture() {
+function fixture(version?: number) {
     const database = new DatabaseSync(':memory:');
     database.exec('PRAGMA foreign_keys=ON');
-    MigrateArchiveDatabase(database);
+    MigrateArchiveDatabase(database, version);
     database.exec(`INSERT INTO roots(id,path,label) VALUES('root','/test','Test');
         INSERT INTO sessions(id,root_id,site_id,site_name,state,settings,started_at,updated_at) VALUES('session','root','site','Site','active','{}',0,0)`);
     const repository = new ArchiveWorkRepository(database);
@@ -17,6 +17,32 @@ function fixture() {
 }
 
 describe('Persistent archive work queue', () => {
+    it('Should quarantine legacy assumed ordering without losing identities, budgets or local receipts', () => {
+        const f = fixture(6);
+        try {
+            const command = (input: Record<string, unknown>) => f.repository.Execute({ sessionId: 'session', ...input } as ArchiveCoordinatorCommand);
+            command({ operation: 'archive-catalog-page', items: [{ id: 'm', title: 'M' }] });
+            command({ operation: 'archive-manga-begin', mangaId: 'm' });
+            command({ operation: 'archive-manga-list', mangaId: 'm', chapters: [{ id: 'c', title: 'C', position: 0, language: 'ar' }], order: 'ascending',
+                orderEvidence: 'MangaScraper.FetchChapters guarantees newest-first after connector decorators', evidence: { state: 'unknown', evidence: '' } });
+            f.database.exec("UPDATE archive_runs SET chapters_started=2; UPDATE archive_work SET state='healthy',attempts=1");
+            const identity = f.database.prepare('SELECT chapter_key FROM archive_work').get()!.chapter_key;
+            const receipts = f.database.prepare('SELECT * FROM session_chapters').all();
+            f.database.exec("CREATE TRIGGER reject_order_review BEFORE UPDATE ON archive_work BEGIN SELECT RAISE(ABORT,'migration failure'); END");
+            expect(() => MigrateArchiveDatabase(f.database)).toThrow('migration failure');
+            expect(f.database.prepare('PRAGMA user_version').get()!.user_version).toBe(6);
+            expect(f.database.prepare('SELECT state FROM archive_work').get()!.state).toBe('healthy');
+            f.database.exec('DROP TRIGGER reject_order_review');
+            MigrateArchiveDatabase(f.database);
+            expect(f.database.prepare('SELECT state,reason,chapter_key,attempts FROM archive_work').get()).toMatchObject({ state: 'review', reason: 'legacy-order-unverified: explicit ordering review required', chapter_key: identity, attempts: 1 });
+            expect(command({ operation: 'archive-next-chapter', mangaId: 'm', now: Date.now() })).toBeNull();
+            expect(f.repository.Snapshot('session').chaptersStarted).toBe(2);
+            expect(f.database.prepare('SELECT * FROM session_chapters').all()).toEqual(receipts.map(row => ({ ...row, order_confidence: 'unknown' })));
+            expect(f.database.prepare("SELECT kind FROM archive_events WHERE kind='ordering-review'").all()).toHaveLength(1);
+            expect(f.database.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok');
+        } finally { f.database.close(); }
+    });
+
     it('Should roll back a failed v5 migration without changing existing v4 budgets', () => {
         const database = new DatabaseSync(':memory:');
         try {
@@ -64,7 +90,7 @@ describe('Persistent archive work queue', () => {
             expect(database.prepare("SELECT name FROM sqlite_master WHERE name='archive_runs'").get()).toBeUndefined();
             database.exec('DROP TABLE archive_work');
             MigrateArchiveDatabase(database);
-            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(6);
+            expect(database.prepare('PRAGMA user_version').get()!.user_version).toBe(7);
         } finally { database.close(); }
     });
 

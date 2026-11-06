@@ -124,6 +124,21 @@ describe('Download attempt contract', () => {
         expect(result.output.state).toBe('not-started');
     });
 
+    it('Should retain mixed-page observations without exporting a chapter with an invalid required image', async () => {
+        const f = fixture();
+        const invalid = { Fetch: vi.fn().mockRejectedValue(new ImageValidationError('HTML instead of an image')) };
+        f.media.Entries.Value = [f.item, invalid, f.item];
+        const task = f.task();
+        await task.Run();
+        const result = await task.Handle.completion;
+        expect(result.fetch).toMatchObject({ state: 'failed', expectedPages: 3, receivedPages: 2, sourceCompleteness: 'unknown' });
+        expect(result.inputValidation.state).toBe('failed');
+        expect(result.output.state).toBe('not-started');
+        expect(result.outcome).toBe('failed');
+        expect(f.item.Fetch).toHaveBeenCalledTimes(2);
+        expect(f.media.Store).not.toHaveBeenCalled();
+    });
+
     it('Should preserve successful fetch separately from temporary storage failure', async () => {
         const f = fixture();
         f.storage.SaveTemporary.mockRejectedValue(new Error('Temporary storage full'));

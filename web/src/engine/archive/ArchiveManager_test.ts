@@ -269,6 +269,28 @@ describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
         expect(f.calls.length).toBe(2);
     });
 
+    it('Should quarantine legacy direction on reopen while preserving real saved files, receipts and budgets', async () => {
+        const f = await fixture();
+        const manager = f.manager();
+        f.setBeforeDownload(async () => { void manager.Pause(); });
+        await manager.Start();
+        const database = f.Repository['database'];
+        database.exec("UPDATE session_chapters SET order_evidence='MangaScraper.FetchChapters guarantees newest-first after connector decorators'; PRAGMA user_version=6");
+        const receipts = database.prepare('SELECT * FROM files').all();
+        const attempts = database.prepare('SELECT * FROM attempts').all();
+        expect(receipts).toHaveLength(1);
+        const bytes = await fs.readFile(path.join(f.root, 'manga', 'old.cbz'));
+        await f.reopen();
+        f.setBeforeDownload(undefined);
+        const resumed = await f.manager().Resume();
+        expect(resumed.state).toBe('review');
+        expect(resumed.chaptersStarted).toBe(1);
+        expect(f.calls).toEqual(['manga/old']);
+        expect(f.Repository['database'].prepare('SELECT * FROM files').all()).toEqual(receipts);
+        expect(f.Repository['database'].prepare('SELECT * FROM attempts').all()).toEqual(attempts);
+        expect(await fs.readFile(path.join(f.root, 'manga', 'old.cbz'))).toEqual(bytes);
+    });
+
     it('Should continue after one inaccessible chapter, with bounded delayed retries', async () => {
         const f = await fixture();
         f.faults.add('manga/old');
@@ -457,12 +479,47 @@ describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
         expect(f.calls).toEqual([]);
     });
 
-    it('Should use the engine newest-first contract once and classify unsupported catalog access', async () => {
+    it.each(['ascending', 'descending'] as const)('Should execute the engine adapter oldest-first with verified %s input', async order => {
+        const f = await fixture();
+        const oldestFirst = [{ id: 'old', title: 'Chapter 0', position: 0, language: 'ar' },
+            { id: 'fraction', title: '0.5', position: 1, language: 'ar' },
+            { id: 'special-a', title: 'Special', position: 2, language: 'ar' },
+            { id: 'special-b', title: 'Special', position: 3, language: 'ar' }];
+        f.manifests.get('manga')!.chapters = order === 'ascending' ? oldestFirst : [...oldestFirst].reverse();
+        const manga = f.site.CreateEntry('manga', 'Manga');
+        manga['scraper'].GetArchiveChapterOrder = () => ({ order, evidence: 'Isolated structured source order, after decorators' });
+        const adapter = new EngineArchiveSource(f.site);
+        f.source.Chapters = adapter.Chapters.bind(adapter);
+        const result = await f.manager().Start();
+        expect(f.calls).toEqual(['manga/old', 'manga/fraction', 'manga/special-a', 'manga/special-b']);
+        expect(result.counts.healthy).toBe(4);
+        expect(result.state).toBe('review'); // Local bytes are healthy; source coverage is still unproven.
+    });
+
+    it('Should reject an asserted direction without evidence', async () => {
+        const f = await fixture();
+        const manga = f.site.CreateEntry('manga', 'Manga');
+        manga['scraper'].GetArchiveChapterOrder = () => ({ order: 'ascending', evidence: '  ' });
+        expect((await new EngineArchiveSource(f.site).Chapters(manga, new AbortController().signal)).order).toBe('unknown');
+    });
+
+    it.each(['ascending', 'descending'] as const)('Should preserve explicit %s evidence without parsing titles or read markers', async order => {
+        const f = await fixture();
+        const manga = f.site.CreateEntry('manga', 'Manga');
+        const scraper = manga['scraper'];
+        scraper.GetArchiveChapterOrder = () => ({ order, evidence: 'Isolated connector response contract after decorators' });
+        const manifest = await new EngineArchiveSource(f.site).Chapters(manga, new AbortController().signal);
+        expect(manifest.order).toBe(order);
+        expect(manifest.orderEvidence).toBe('Isolated connector response contract after decorators');
+        expect(manifest.chapters.map(chapter => chapter.title)).toEqual(['Special', '1.5']);
+    });
+
+    it('Should require connector-specific order evidence and classify unsupported catalog access', async () => {
         const f = await fixture();
         const native = new EngineArchiveSource(f.site);
         const manga = f.site.CreateEntry('manga', 'Manga');
         const manifest = await native.Chapters(manga, new AbortController().signal);
-        expect(manifest.order).toBe('descending');
+        expect(manifest.order).toBe('unknown');
         expect(manifest.coverage.state).toBe('unknown');
         f.source.Catalog = async function* () { throw new Error('Not implemented: full index'); };
         const result = await f.manager().Start();

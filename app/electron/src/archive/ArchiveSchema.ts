@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 6;
+export const ArchiveSchemaVersion = 7;
 
 const migrations = [
     `
@@ -72,6 +72,19 @@ const migrations = [
      CREATE INDEX archive_manifest_order ON archive_manifest_entries(session_id,manga_id,position,id);`,
     `ALTER TABLE archive_runs ADD COLUMN storage_error TEXT;`,
     `CREATE TABLE archive_ui_preferences(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);`,
+    // Only the historical blanket assumption is revoked. File receipts and attempt budgets remain untouched.
+    `UPDATE archive_work SET state='review',reason='legacy-order-unverified: explicit ordering review required'
+         || CASE WHEN reason='' THEN '' ELSE '; previous: ' || reason END
+       WHERE EXISTS (SELECT 1 FROM session_chapters sc WHERE sc.session_id=archive_work.session_id
+         AND sc.chapter_key=archive_work.chapter_key
+         AND sc.order_evidence='MangaScraper.FetchChapters guarantees newest-first after connector decorators');
+     UPDATE session_chapters SET order_confidence='unknown'
+       WHERE order_evidence='MangaScraper.FetchChapters guarantees newest-first after connector decorators';
+     UPDATE archive_manifests SET ordering='unknown'
+       WHERE order_evidence='MangaScraper.FetchChapters guarantees newest-first after connector decorators';
+     INSERT INTO archive_events(session_id,manga_id,kind,reason,created_at)
+       SELECT DISTINCT session_id,manga_id,'ordering-review','Legacy blanket direction assumption revoked; files and budgets preserved',CAST(strftime('%s','now') AS INTEGER)*1000
+       FROM archive_work WHERE reason LIKE 'legacy-order-unverified: explicit ordering review required%';`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

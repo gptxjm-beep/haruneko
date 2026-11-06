@@ -22,6 +22,7 @@
     const image = await canvas.convertToBlob({ type: 'image/png' });
     let fetched = 0;
     const scraper = {
+        GetArchiveChapterOrder: () => ({ order: 'descending', evidence: 'Isolated fixture explicitly returns new then old' }),
         FetchPages: async chapter => [new Page(scraper, chapter, new URL('https://example.invalid/local-image'))],
         FetchImage: async () => { fetched++; return image; },
     };

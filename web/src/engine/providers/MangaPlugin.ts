@@ -16,6 +16,11 @@ import { WithOutputLock } from '../exporters/OutputLock';
 
 const settingsKeyPrefix = 'plugin.';
 
+export interface ArchiveChapterOrder {
+    order: 'ascending' | 'descending' | 'unknown';
+    evidence: string;
+}
+
 /**
  * The abstract base class that any custom manga scraper must implement.
  * This should be used for any custom manga scraper implementation that is not going to utilize the decorator pattern.
@@ -41,9 +46,14 @@ export abstract class MangaScraper extends MediaScraper<MangaPlugin> {
 
     /**
      * Get the chapters for the given {@link manga}.
-     * Chapters are guaranteed to be in descending order (starting with the newest chapter), the frontend may provide additional sorting.
+     * Connectors conventionally return newest first; archival ordering requires separate verified evidence.
      */
     public abstract FetchChapters(manga: Manga): Promise<Chapter[]>;
+
+    /** Evidence must describe the final FetchChapters sequence, including decorators. Titles alone are not evidence. */
+    public GetArchiveChapterOrder(_manga: Manga): ArchiveChapterOrder {
+        return { order: 'unknown', evidence: 'Connector chapter direction has not been verified' };
+    }
 
     /**
      * Get the pages for the given {@link chapter}.
@@ -164,6 +174,10 @@ export class Manga extends MediaContainer<Chapter> {
 
     public override CreateEntry(identifier: string, title: string): Chapter {
         return new Chapter(this.scraper, this, identifier, title);
+    }
+
+    public get ArchiveChapterOrder(): ArchiveChapterOrder {
+        return this.scraper.GetArchiveChapterOrder?.(this) ?? { order: 'unknown', evidence: 'Connector chapter direction has not been verified' };
     }
 
     protected PerformUpdate(): Promise<Chapter[]> {

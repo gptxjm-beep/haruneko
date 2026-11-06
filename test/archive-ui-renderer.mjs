@@ -25,6 +25,7 @@
     let fetched = 0; let release;
     let gate = new Promise(resolve => { release = resolve; });
     class FixtureScraper extends MangaScraper {
+        GetArchiveChapterOrder() { return { order: 'ascending', evidence: 'Isolated single-chapter fixture' }; }
         constructor(id, title) { super(id, title, 'https://isolated.invalid/', Tags.Media.Comic, Tags.Language.Arabic); }
         async Initialize() { /* Isolated fixture: no connector window or network is used. */ }
         async FetchMangas(site) { return [new Manga(this, site, 'manga', 'UI Manga')]; }
