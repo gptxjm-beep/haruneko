@@ -26,6 +26,13 @@ export function ValidateArchivePolicy(input: ArchivePolicy): ArchivePolicy {
 /** Durable coordinator queue. All compound transitions and diagnostic events commit together. */
 export class ArchiveWorkRepository {
     constructor(private readonly database: DatabaseSync) {}
+    private SelectiveBudget(sessionId: string): { mangas_used: number; chapters_started: number } | null {
+        // Historical migration fixtures can still exercise their original schema before v9 is applied.
+        if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE name='hub_queue'").get()
+            || !this.database.prepare('SELECT 1 FROM hub_queue WHERE session_id=?').get(sessionId)) return null;
+        const row = this.database.prepare('SELECT coalesce(sum(r.mangas_used),0) m,coalesce(sum(r.chapters_started),0) c FROM archive_runs r JOIN hub_queue q ON q.session_id=r.session_id').get()!;
+        return { mangas_used: Number(row.m), chapters_started: Number(row.c) };
+    }
 
     private Transaction<T>(action: () => T): T {
         this.database.exec('BEGIN IMMEDIATE');
@@ -154,7 +161,7 @@ export class ArchiveWorkRepository {
     }
 
     public Snapshot(sessionId: string): ArchiveRunSnapshot {
-        const run = this.Run(sessionId);
+        const run: Row = { ...this.Run(sessionId), ...this.SelectiveBudget(sessionId) };
         const counts: Record<string, number> = {};
         for (const row of this.database.prepare('SELECT state,count(*) AS n FROM archive_work WHERE session_id=? GROUP BY state').all(sessionId)) counts[String(row.state)] = Number(row.n);
         for (const row of this.database.prepare('SELECT state,count(*) AS n FROM archive_mangas WHERE session_id=? GROUP BY state').all(sessionId)) counts[`manga:${row.state}`] = Number(row.n);
@@ -169,6 +176,10 @@ export class ArchiveWorkRepository {
         const session = this.database.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);
         if (!session) throw new Error('Unknown archive session');
         if (command.operation === 'archive-run-open') {
+            if (this.SelectiveBudget(sessionId)) {
+                const control = this.database.prepare('SELECT c.state FROM hub_queue_control c JOIN hub_queue q ON q.seq=c.current_seq WHERE q.session_id=? AND q.removed=0').get(sessionId);
+                if (control?.state !== 'Running') throw new Error('Selective session requires its queue owner');
+            }
             const policy = ValidateArchivePolicy(command.policy);
             const previous = this.database.prepare('SELECT * FROM archive_runs WHERE session_id=?').get(sessionId);
             if (session.state === 'closed' || previous && (previous.state === 'running' || previous.state === 'cancelled' || previous.policy !== JSON.stringify(policy))) throw new Error('Run is already active, cancelled, or policy differs');
@@ -187,7 +198,7 @@ export class ArchiveWorkRepository {
             });
             return this.Snapshot(sessionId);
         }
-        const run = this.Run(sessionId);
+        const run: Row = { ...this.Run(sessionId), ...this.SelectiveBudget(sessionId) };
         if (command.operation === 'archive-run-snapshot') return this.Snapshot(sessionId);
         if (command.operation === 'archive-storage-stop') {
             const fault = command.fault;

@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { MigrateArchiveDatabase } from './ArchiveSchema';
 import { ArchiveWorkRepository } from './ArchiveWorkRepository';
 import { ArchiveUIRepository } from './ArchiveUIRepository';
+import { SelectiveQueueRepository } from './SelectiveQueueRepository';
 import { Count, Text, PathKey, RelativePath, IsWithin, SafeMessage, ErrorCode } from './ArchivePaths';
 import type { ArchiveAttemptResult, ChapterRegistration } from './ArchiveProtocol';
 
@@ -20,6 +21,7 @@ export class ArchiveRepository {
     private closed = false;
     public readonly Work: ArchiveWorkRepository;
     public readonly UI: ArchiveUIRepository;
+    public readonly Queue: SelectiveQueueRepository;
 
     constructor(private readonly filename: string) {
         fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -35,6 +37,7 @@ export class ArchiveRepository {
             MigrateArchiveDatabase(this.database);
             this.Work = new ArchiveWorkRepository(this.database);
             this.UI = new ArchiveUIRepository(this.database, this.Work);
+            this.Queue = new SelectiveQueueRepository(this.database, this.UI, this.Work);
             this.RecoverInterrupted();
         } catch(error) {
             this.database?.close();
@@ -47,6 +50,7 @@ export class ArchiveRepository {
     public RecoverInterrupted(): void {
         this.Transaction(() => {
             this.Work.RecoverInterruptedCatalogs();
+            this.Queue.Recover();
             this.database.prepare("UPDATE sessions SET state='interrupted', updated_at=? WHERE state='active'").run(Date.now());
             this.database.prepare("UPDATE attempts SET state='interrupted', updated_at=? WHERE state='running'").run(Date.now());
             this.database.prepare("UPDATE session_chapters SET state='Interrupted' WHERE state IN ('Downloading','Verifying')").run();

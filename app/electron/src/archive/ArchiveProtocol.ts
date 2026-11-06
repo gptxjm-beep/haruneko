@@ -1,6 +1,7 @@
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 import type { ArchiveStorageFault } from './ArchiveStorageContract';
 import type { ArchiveUICommand } from './ArchiveUIContract';
+import type { SelectiveQueueCommand } from './SelectiveQueueContract';
 export const ArchiveChannel = 'ArchiveRepository::Request';
 export type ArchiveReply = { ok: true; value: unknown } | { ok: false; error: { kind: 'repository' | 'filesystem' | 'validation' | 'storage'; message: string; storage?: ArchiveStorageFault } };
 
@@ -40,7 +41,7 @@ export interface ArchiveAttemptResult {
     errors: { stage: string; message: string }[];
 }
 
-export type ArchiveCommand = ArchiveCoordinatorCommand | ArchiveUICommand
+export type ArchiveCommand = ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
     | { operation: 'storage-check'; sessionId: string }
     | { operation: 'storage-image'; attemptId: string; bytes: number; quota: { usage: number; quota: number } }
     | { operation: 'storage-image-preflight'; attemptId: string; quota: { usage: number; quota: number } }

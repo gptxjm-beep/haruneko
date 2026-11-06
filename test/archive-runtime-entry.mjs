@@ -48,7 +48,27 @@ if (process.argv[2] === 'crash-child') {
     const [filename, session, chapter, phase] = process.argv.slice(3);
     const repository = new ArchiveRepository(filename);
     const files = new ArchiveFiles(repository);
-    if (['coordinator', 'manifest', 'catalog'].includes(phase)) {
+    if (phase.startsWith('queue-')) {
+        const reference = { siteId: 'queue-site', mangaId: 'queue-manga', title: 'Queue manga', siteName: 'Queue site' };
+        repository.Queue.Execute({ operation: 'queue-select', reference, selected: true });
+        repository.Queue.Execute({ operation: 'queue-add' });
+        if (phase !== 'queue-added') {
+            const preferences = { ...repository.UI.Preferences(), rootId: repository.Session(session).root_id };
+            repository.Queue.Execute({ operation: 'queue-open', preferences, confirmed: true });
+            const item = repository.Queue.Execute({ operation: 'queue-next' });
+            if (phase === 'queue-verified') {
+                const sessionId = item.sessionId, mangaId = item.mangaId;
+                repository.Work.Execute({ operation: 'archive-run-open', sessionId, policy: preferences.policy });
+                repository.Work.Execute({ operation: 'archive-manga-begin', sessionId, mangaId });
+                repository.Work.Execute({ operation: 'archive-manga-list', sessionId, mangaId, chapters: [{ id: 'owned', title: 'Owned', position: 0, language: 'ar' }], order: 'ascending', orderEvidence: 'Isolated crash fixture', evidence: { state: 'unknown', evidence: 'Fixture' } });
+                const work = repository.Work.Execute({ operation: 'archive-next-chapter', sessionId, mangaId, now: Date.now() });
+                repository.Work.Execute({ operation: 'archive-chapter-begin', sessionId, mangaId, chapterId: 'owned' });
+                const attempt = repository.BeginAttempt(sessionId, work.chapter_key);
+                repository.Checkpoint(attempt, 'export', 1, 1, 1);
+                const writeId = await files.Begin(attempt, 'Queue/verified.cbz', 4); await files.Chunk(writeId, Buffer.from('data')); await files.Finish(writeId);
+            }
+        }
+    } else if (['coordinator', 'manifest', 'catalog'].includes(phase)) {
         const policy = { maxMangas: 1, maxChapters: 2, delayMs: 100, retryDelayMs: 1000, maxAttempts: 2, languages: [], unknownLanguage: 'include' };
         const command = input => repository.Work.Execute({ sessionId: session, ...input });
         command({ operation: 'archive-run-open', policy });
@@ -324,12 +344,12 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 8);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 9);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });
 
-    for (const phase of ['transaction', 'fetch', 'writing', 'staged', 'published', 'verified', 'coordinator', 'manifest', 'catalog']) {
+    for (const phase of ['transaction', 'fetch', 'writing', 'staged', 'published', 'verified', 'coordinator', 'manifest', 'catalog', 'queue-added', 'queue-prepared', 'queue-verified']) {
         await check(`SIGKILL recovery after ${phase}`, async () => {
             const f = await fixture();
             try {
@@ -351,6 +371,23 @@ if (process.argv[2] === 'crash-child') {
                 const files = new ArchiveFiles(recovered);
                 try {
                     assert.equal(recovered.Session(f.session).state, 'interrupted');
+                    if (phase.startsWith('queue-')) {
+                        const summary = recovered.Queue.Summary(), previous = recovered.Queue.Execute({ operation: 'queue-list' })[0];
+                        assert.equal(recovered.Queue.Execute({ operation: 'queue-selections' }).length, 1);
+                        assert.equal(summary.state, phase === 'queue-added' ? 'Paused' : 'Interrupted');
+                        assert.equal(summary.chaptersStarted, phase === 'queue-verified' ? 1 : 0);
+                        const preferences = summary.preferences ?? { ...recovered.UI.Preferences(), rootId: f.grant.rootId };
+                        recovered.Queue.Execute({ operation: 'queue-open', preferences, confirmed: true });
+                        const resumed = recovered.Queue.Execute({ operation: 'queue-next' });
+                        assert.equal(recovered.Queue.Execute({ operation: 'queue-next' }).sessionId, resumed.sessionId);
+                        if (previous.sessionId) assert.equal(resumed.sessionId, previous.sessionId);
+                        assert.equal(recovered.database.prepare('SELECT count(*) n FROM sessions').get().n, 2);
+                        if (phase === 'queue-verified') {
+                            const chapterKey = recovered.database.prepare('SELECT chapter_key FROM archive_work WHERE session_id=?').get(resumed.sessionId).chapter_key;
+                            assert.equal((await files.Recover(resumed.sessionId, chapterKey, true)).action, 'reuse');
+                            assert.equal(await fs.readFile(path.join(f.root, 'Queue/verified.cbz'), 'utf8'), 'data');
+                        }
+                    }
                     if (phase === 'transaction') assert.equal(recovered.Session(f.session).site_name, 'Fixture site');
                     if (phase === 'catalog') {
                         const snapshot = recovered.Work.Snapshot(f.session);

@@ -5,6 +5,7 @@ import { ArchiveFiles } from './ArchiveFiles';
 import { ArchiveChannel, type ArchiveCommand } from './ArchiveProtocol';
 import { SafeMessage } from './ArchivePaths';
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
+import type { SelectiveQueueCommand } from './SelectiveQueueContract';
 import { ArchiveStorageSafety, DefaultArchiveStoragePolicy, type ArchiveStoragePolicy, type ArchiveVolumeProbe } from './ArchiveStorageSafety';
 import { ArchiveStorageController } from './ArchiveStorageController';
 import { StorageFailure, ArchiveStorageError } from './ArchiveStorageContract';
@@ -114,6 +115,7 @@ export class ArchiveIPC {
             }
         }
         if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
+        if (command.operation.startsWith('queue-')) return this.repository.Queue.Execute(command as SelectiveQueueCommand);
         switch (command.operation) {
             case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };
             case 'ui-save-preferences': {

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 8;
+export const ArchiveSchemaVersion = 9;
 
 // Fixed historical values only: do not match substrings in independently supplied ordering evidence.
 const legacyOrder = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
@@ -111,6 +111,17 @@ const migrations = [
          'Historical order evidence revoked, including Manager normalization prefix; files and budgets preserved',CAST(strftime('%s','now') AS INTEGER)*1000
        FROM archive_work w JOIN session_chapters sc ON sc.session_id=w.session_id AND sc.chapter_key=w.chapter_key
        WHERE ${unverifiedChapterSQL};`,
+    // v9: personal selection and selective queue. Existing archive receipts and budgets are untouched.
+    `CREATE TABLE hub_selections(seq INTEGER PRIMARY KEY AUTOINCREMENT,site_id TEXT NOT NULL,manga_id TEXT NOT NULL,
+       title TEXT NOT NULL,site_name TEXT NOT NULL,UNIQUE(site_id,manga_id));
+     CREATE TABLE hub_queue(seq INTEGER PRIMARY KEY AUTOINCREMENT,site_id TEXT NOT NULL,manga_id TEXT NOT NULL,
+       title TEXT NOT NULL,site_name TEXT NOT NULL,priority INTEGER NOT NULL,removed INTEGER NOT NULL DEFAULT 0,
+       state TEXT NOT NULL DEFAULT 'Queued',reason TEXT NOT NULL DEFAULT '',scope TEXT NOT NULL DEFAULT '{"mode":"all"}',
+       session_id TEXT UNIQUE REFERENCES sessions(id),UNIQUE(site_id,manga_id));
+     CREATE INDEX hub_queue_order ON hub_queue(removed,priority,seq);
+     CREATE TABLE hub_queue_control(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL DEFAULT 'Paused',
+       reason TEXT NOT NULL DEFAULT '',preferences TEXT,current_seq INTEGER REFERENCES hub_queue(seq));
+     INSERT INTO hub_queue_control(id) VALUES(1);`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

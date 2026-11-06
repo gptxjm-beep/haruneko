@@ -35,7 +35,8 @@ export class ArchiveUIRepository {
     public Save(input: ArchivePreferences): ArchivePreferences {
         const value = this.Validate(input);
         if (value.reserveGiB !== this.Preferences().reserveGiB
-            && this.db.prepare("SELECT 1 FROM archive_runs WHERE state IN ('running','paused','interrupted') LIMIT 1").get()) throw new Error('Stop or cancel open archive sessions before changing the storage reserve');
+            && (this.db.prepare("SELECT 1 FROM archive_runs WHERE state IN ('running','paused','interrupted') LIMIT 1").get()
+                || this.db.prepare("SELECT 1 FROM hub_queue_control WHERE state='Running'").get())) throw new Error('Stop or cancel open archive sessions and the selective queue before changing the storage reserve');
         this.db.prepare('INSERT INTO archive_ui_preferences(id,value) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(JSON.stringify(value));
         return value;
     }
@@ -67,7 +68,7 @@ export class ArchiveUIRepository {
     }
 
     public Sessions(before = Number.MAX_SAFE_INTEGER): ArchiveUISession[] {
-        return this.db.prepare('SELECT r.session_id FROM archive_runs r JOIN sessions s ON s.id=r.session_id WHERE s.rowid<? ORDER BY s.rowid DESC LIMIT 50')
+        return this.db.prepare('SELECT r.session_id FROM archive_runs r JOIN sessions s ON s.id=r.session_id WHERE s.rowid<? AND NOT EXISTS (SELECT 1 FROM hub_queue q WHERE q.session_id=s.id) ORDER BY s.rowid DESC LIMIT 50')
             .all(Count(before, 'session cursor', Number.MAX_SAFE_INTEGER)).map(row => this.Session(String(row.session_id)));
     }
 
