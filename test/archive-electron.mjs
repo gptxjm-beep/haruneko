@@ -27,6 +27,7 @@ try {
         HARUNEKO_ARCHIVE_TEST_URL: `http://127.0.0.1:${server.httpServer.address().port}/__archive-integration`,
         HARUNEKO_ARCHIVE_TEST_PRELOAD: path.resolve('app/electron/build/preload.js'),
         HARUNEKO_ARCHIVE_TEST_SCRIPT: path.resolve('test/archive-electron-renderer.mjs'),
+        HARUNEKO_ARCHIVE_UI_TEST_SCRIPT: path.resolve('test/archive-ui-renderer.mjs'),
     };
     delete env.ELECTRON_RUN_AS_NODE;
     const executable = path.resolve('node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : 'electron');

@@ -73,6 +73,7 @@ const template = html<SettingsDialog>`
     <fluent-dialog type="modal" ${ref('dialog')}>
         <fluent-dialog-body>
             <div slot="title">${model => model.Localization.Locale.Frontend_FluentCore_SettingsDialog_Title()}</div>
+            <p role="note">Smart Site Archiver is available in Classic on Electron. This Fluent interface does not start or control archive sessions.</p>
             <div id="settings">
                 ${repeat(model => model.Settings, CreateSettingTemplate)}
             </div>

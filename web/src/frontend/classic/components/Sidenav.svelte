@@ -29,6 +29,7 @@
     import SettingsMenu from './settings/SettingsModal.svelte';
     import PluginSelect from './PluginSelect.svelte';
     import BookmarksImport from './BookmarksImport.svelte';
+    import ArchiveSiteModal from './archiving/ArchiveSiteModal.svelte';
 
     import { Store as UI } from '../stores/Stores.svelte';
     import { GlobalSettings, Settings as UISettings } from '../stores/Settings.svelte';
@@ -44,9 +45,13 @@
     let isSettingsModalOpen =  $state(false);
     let isPluginModalOpen = $state(false);
     let isBookmarksImportModalOpen =  $state(false);
+    let isArchiveModalOpen = $state(false);
 </script>
 
 <PluginSelect bind:isPluginModalOpen on:close={() => (isPluginModalOpen = false)} />
+{#if isArchiveModalOpen}
+    <ArchiveSiteModal bind:open={isArchiveModalOpen} site={UI.selectedPlugin} />
+{/if}
 {#if isSettingsModalOpen}
     <SettingsMenu bind:isSettingsModalOpen selectedTab={settingsSelectedTabs} />
 {/if}
@@ -76,6 +81,11 @@
             icon={CopyLink}
             onclick={() =>
                 document.dispatchEvent(new Event('media-paste-url'))}
+        />
+        <SideNavLink
+            text="Archive Site"
+            icon={ImportExport}
+            onclick={() => (isArchiveModalOpen = true)}
         />
         <SideNavLink
             text={GlobalSettings.Locale.Frontend_Plugins()}
@@ -117,6 +127,14 @@
                 icon={TaskSettings}
                 onclick={() => {
                     settingsSelectedTabs = 3;
+                    isSettingsModalOpen = true;
+                }}
+            />
+            <SideNavLink
+                text="Archiving"
+                icon={ImportExport}
+                onclick={() => {
+                    settingsSelectedTabs = 4;
                     isSettingsModalOpen = true;
                 }}
             />

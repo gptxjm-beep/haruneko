@@ -7,6 +7,7 @@
         TabContent,
     } from 'carbon-components-svelte';
     import SettingsViewer from './SettingsViewer.svelte';
+    import SettingsArchiving from '../archiving/SettingsArchiving.svelte';
     import { frontendClassicSettings, frontendClassicSettingsViewer } from '../../stores/Settings.svelte';
     import { Scope as Global_Scope } from '../../../../engine/SettingsGlobal';
 
@@ -33,6 +34,7 @@
         <Tab label="Interface" />
         <Tab label="Viewer" />
         <Tab label="Trackers" />
+        <Tab label="Archiving" />
         {#snippet content()}
             <TabContent class="settingtab">
                 <SettingsViewer
@@ -65,6 +67,9 @@
                     <h4>{tracker.Title}</h4>
                     <SettingsViewer settings={[...tracker.Settings]} />
                 {/each}
+            </TabContent>
+            <TabContent class="settingtab">
+                {#if selectedTab === 4}<SettingsArchiving />{/if}
             </TabContent>
         {/snippet}
     </Tabs>

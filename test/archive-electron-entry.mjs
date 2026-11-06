@@ -23,7 +23,7 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
     const url = process.env.HARUNEKO_ARCHIVE_TEST_URL;
     const preferences = { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: process.env.HARUNEKO_ARCHIVE_TEST_PRELOAD };
-    window = new BrowserWindow({ show: false, webPreferences: preferences });
+    window = new BrowserWindow({ show: false, width: 1280, height: 1000, webPreferences: preferences });
     let available = 1024n ** 4n;
     let blockPublication = false;
     // All overrides live in this isolated test entry, never in the production main process.
@@ -47,13 +47,32 @@ try {
     console.log('Running renderer archive checks');
     const checks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARCHIVE_TEST_SCRIPT, 'utf8'));
     for (const check of checks) assert.equal(check.passed, true, check.name);
+    const uiChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARCHIVE_UI_TEST_SCRIPT, 'utf8'));
+    for (const check of uiChecks) assert.equal(check.passed, true, check.name);
+    if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
+    const fixture = await window.webContents.executeJavaScript('globalThis.archiveUIFixture');
+    const beforeReload = await window.webContents.executeJavaScript(`(async () => {
+        const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
+        const progress = await client.Request({ operation: 'ui-progress', sessionId: '${fixture.id}' });
+        await client.Request({ operation: 'archive-run-open', sessionId: '${fixture.id}', policy: progress.snapshot.policy });
+        return progress.snapshot.chaptersStarted;
+    })()`);
+    await window.reload();
+    await new Promise(resolve => window.webContents.once('did-finish-load', resolve));
+    const afterReload = await window.webContents.executeJavaScript(`(async () => {
+        const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
+        return { progress: await client.Request({ operation: 'ui-progress', sessionId: '${fixture.id}' }), preferences: await client.Request({ operation: 'ui-preferences' }) };
+    })()`);
+    assert.equal(afterReload.progress.snapshot.state, 'interrupted', 'Renderer replacement must interrupt orphan runs without auto-resume');
+    assert.equal(afterReload.progress.snapshot.chaptersStarted, beforeReload, 'Renderer replacement must preserve the cumulative budget');
+    assert.equal(afterReload.preferences.preferences.policy.delayMs, 2000);
     other = new BrowserWindow({ show: false, webPreferences: preferences });
     await other.loadURL(url);
     const denied = await other.webContents.executeJavaScript(`ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'list-sessions' }).then(() => false, error => error.message.includes('not authorized'))`);
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + 3} Electron renderer/IPC/archive pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + 6} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);
