@@ -6,6 +6,7 @@
     const { DownloadManager } = await import('/src/engine/DownloadManager.ts');
     const { EnqueueArchiveChapter } = await import('/src/engine/archive/ArchiveDownload.ts');
     const { ArchiveManager } = await import('/src/engine/archive/ArchiveManager.ts');
+    const { DiagnoseChapterImage } = await import('/src/engine/ImageDiagnostics.ts');
     const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts');
     const { Priority } = await import('/src/engine/taskpool/DeferredTask.ts');
     const { FetchConcealedRequest } = await import('/src/engine/platform/FetchConcealedRequest.ts');
@@ -32,6 +33,8 @@
         const decoded = await page.Fetch(Priority.Normal, new AbortController().signal);
         record(`MangaTek fixture page ${page.Link.pathname} is validated from its actual PNG bytes`, decoded.type === 'image/png');
     }
+    const diagnostic = await DiagnoseChapterImage(tek.chapter, 3, new AbortController().signal);
+    record('Safe diagnostics use the real decoder once and record status, signature and dimensions without URLs', diagnostic.stage === 'complete' && diagnostic.httpStatus === 200 && diagnostic.signature === 'png' && diagnostic.width === 20 && diagnostic.height === 2000 && !JSON.stringify(diagnostic).includes('https:'));
     const picture = await createImageBitmap(await pages[2].Fetch(Priority.Normal, new AbortController().signal));
     record('Tall narrow fixture preserves its intrinsic 20 by 2000 pixel dimensions independently of MIME', picture.width === 20 && picture.height === 2000); picture.close();
     const { mount, unmount, tick } = await import('/@id/svelte');
@@ -60,6 +63,8 @@
     Respond('https://bleach-fixture.invalid/full.png', { body: '<html>Forbidden fixture</html>', status: 403 });
     let denied = false; try { await mixed[0].Fetch(Priority.Normal, new AbortController().signal); } catch { denied = true; }
     record('The existing response validator rejects a synthetic HTTP 403 without any alternate access attempt', denied);
+    const blockedDiagnostic = await DiagnoseChapterImage(lover.chapter, 1, new AbortController().signal);
+    record('Safe diagnostics retain HTTP 403 and the fetch stage without recording the restricted response body', blockedDiagnostic.httpStatus === 403 && blockedDiagnostic.error === 'access-restricted' && blockedDiagnostic.signature === null && blockedDiagnostic.bytes === null);
     Respond('https://3asq.online/manga/priority/ajax/chapters/', { body: `<ul>${Array.from({ length: 364 }, (_, index) => `<li class="wp-manga-chapter"><a href="https://3asq.online/manga/priority/${364 - index}/">${364 - index}</a></li>`).join('')}</ul>` });
     const chapters = await lover.scraper.FetchChapters(lover.manga);
     record('Real AJAX HTML extraction retains all 364 available chapter links in newest-first order', chapters.length === 364 && chapters[0].Identifier.endsWith('/364/') && chapters.at(-1).Identifier.endsWith('/1/'));

@@ -30,6 +30,7 @@
     import PluginSelect from './PluginSelect.svelte';
     import BookmarksImport from './BookmarksImport.svelte';
     import ArchiveSiteModal from './archiving/ArchiveSiteModal.svelte';
+    import ImageDiagnosticsModal from './archiving/ImageDiagnosticsModal.svelte';
 
     import { Store as UI } from '../stores/Stores.svelte';
     import { GlobalSettings, Settings as UISettings } from '../stores/Settings.svelte';
@@ -46,8 +47,12 @@
     let isPluginModalOpen = $state(false);
     let isBookmarksImportModalOpen =  $state(false);
     let isArchiveModalOpen = $state(false);
+    let isImageDiagnosticsOpen = $state(false);
 </script>
 
+{#if isImageDiagnosticsOpen}
+    <ImageDiagnosticsModal bind:open={isImageDiagnosticsOpen} chapter={UI.selectedItem} />
+{/if}
 <PluginSelect bind:isPluginModalOpen on:close={() => (isPluginModalOpen = false)} />
 {#if isArchiveModalOpen}
     <ArchiveSiteModal bind:open={isArchiveModalOpen} site={UI.selectedPlugin} />
@@ -87,6 +92,9 @@
             icon={ImportExport}
             onclick={() => (isArchiveModalOpen = true)}
         />
+        {#if import.meta.env.VITE_ENHANCED_PREVIEW === '1'}
+            <SideNavLink text="Image Diagnostics (Preview)" icon={Debug} onclick={() => (isImageDiagnosticsOpen = true)} />
+        {/if}
         <SideNavLink
             text={GlobalSettings.Locale.Frontend_Plugins()}
             icon={PlugFilled}

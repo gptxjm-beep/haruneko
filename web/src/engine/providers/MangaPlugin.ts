@@ -9,6 +9,7 @@ import { CreateChapterExportRegistry } from '../exporters/MangaExporterRegistry'
 import { Observable } from '../Observable';
 import type { Tag } from '../Tags';
 import { ValidateImage } from '../ValidateImage';
+import { PageDiagnostic, RecordDiagnosticBlob } from '../ImageDiagnostics';
 import type { StoreOptions } from '../DownloadContract';
 import { MangaExportFormat } from '../exporters/MangaExporterRegistry';
 import { WithOutputLock } from '../exporters/OutputLock';
@@ -249,7 +250,12 @@ export class Page<T extends JSONObject = JSONObject> extends MediaItem {
         super(parent);
     }
 
+    public CreateDiagnosticCopy(): Page<T> { return new Page(this.scraper, this.Parent as Chapter, this.Link, this.Parameters); }
+
     public async Fetch(priority: Priority, signal: AbortSignal): Promise<Blob> {
-        return ValidateImage(await this.scraper.FetchImage(this, priority, signal), signal, priority);
+        const report = PageDiagnostic(this);
+        const blob = await this.scraper.FetchImage(this, priority, signal);
+        if (report) await RecordDiagnosticBlob(report, blob);
+        return ValidateImage(blob, signal, priority, report ? (width, height) => { report.width = width; report.height = height; } : undefined);
     }
 }

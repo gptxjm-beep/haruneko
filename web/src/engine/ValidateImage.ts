@@ -28,12 +28,12 @@ function AwaitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise
  * Validate a downloaded page using the browser image decoder, retaining the original bytes.
  * Common raster signatures take precedence over an inaccurate HTTP content type.
  */
-export async function ValidateImage(data: Blob, signal?: AbortSignal, priority: Priority = Priority.Normal): Promise<Blob> {
+export async function ValidateImage(data: Blob, signal?: AbortSignal, priority: Priority = Priority.Normal, dimensions?: (width: number, height: number) => void): Promise<Blob> {
     signal?.throwIfAborted();
-    return AwaitWithAbort(validationPool.Add(() => DecodeImage(data, signal), priority, signal), signal);
+    return AwaitWithAbort(validationPool.Add(() => DecodeImage(data, signal, dimensions), priority, signal), signal);
 }
 
-async function DecodeImage(data: Blob, signal?: AbortSignal): Promise<Blob> {
+async function DecodeImage(data: Blob, signal?: AbortSignal, dimensions?: (width: number, height: number) => void): Promise<Blob> {
     signal?.throwIfAborted();
     if (!data?.size) throw new ImageValidationError('Downloaded page is empty or missing');
 
@@ -60,6 +60,7 @@ async function DecodeImage(data: Blob, signal?: AbortSignal): Promise<Blob> {
         signal?.throwIfAborted();
         if (!image.naturalWidth || !image.naturalHeight) throw new Error('Image has no dimensions');
         validatedImages.add(imageData);
+        dimensions?.(image.naturalWidth, image.naturalHeight);
         return imageData;
     } catch(cause) {
         signal?.throwIfAborted();

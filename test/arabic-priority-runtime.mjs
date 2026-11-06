@@ -1,5 +1,6 @@
 // Test-only transport: responses are synthetic local data. Unknown routes throw; no external fetch or session access occurs.
 import { FetchProvider } from '/src/engine/platform/FetchProviderCommon.ts';
+import { RecordDiagnosticResponse } from '/src/engine/ImageDiagnostics.ts';
 const routes = new Map();
 const requests = [];
 export function Respond(url, response) { routes.set(url, response); }
@@ -21,6 +22,7 @@ class LocalProvider extends FetchProvider {
         });
         const response = new Response(route.body, { status: route.status ?? 200, headers: { 'Content-Type': route.type ?? 'text/html' } });
         Object.defineProperty(response, 'url', { value: route.finalUrl ?? request.url });
+        RecordDiagnosticResponse(request, response);
         await this.ValidateResponse(response);
         return response;
     }

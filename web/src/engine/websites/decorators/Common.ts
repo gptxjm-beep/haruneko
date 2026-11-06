@@ -1,3 +1,4 @@
+import { AttachDiagnosticRequest, RecordDiagnosticResponse } from '../../ImageDiagnostics';
 import { WebsiteResourceKey as R } from '../../../i18n/ILocale';
 import { Exception, InternalError } from '../../Error';
 import { Fetch, FetchCSS, FetchWindowScript } from '../../platform/FetchProvider';
@@ -586,12 +587,16 @@ export async function FetchImageAjax(this: MangaScraper, page: Page, priority: P
             'Referer': page.Parameters?.Referer ?? imageLink.origin,
         };
         const request = new Request(imageLink, { signal, headers });
-        let response = await Fetch(request);
-        if (deProxifyLink && response.headers.has('Cf-Polished')) {
-            headers['Origin'] = imageLink.protocol + '//' + Date.now().toString(36) + Math.random().toString(36);
-            response = await Fetch(new Request(imageLink, { signal, headers }));
-        }
-        return detectMimeType ? GetTypedData(await response.arrayBuffer()) : response.blob();
+        const detachDiagnostic = AttachDiagnosticRequest(page, request);
+        try {
+            let response = await Fetch(request);
+            if (deProxifyLink && response.headers.has('Cf-Polished')) {
+                headers['Origin'] = imageLink.protocol + '//' + Date.now().toString(36) + Math.random().toString(36);
+                response = await Fetch(new Request(imageLink, { signal, headers }));
+            }
+            RecordDiagnosticResponse(request, response);
+            return detectMimeType ? GetTypedData(await response.arrayBuffer()) : response.blob();
+        } finally { detachDiagnostic(); }
     }, priority, signal);
 }
 
