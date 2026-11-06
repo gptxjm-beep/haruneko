@@ -49,6 +49,8 @@ try {
     for (const check of checks) assert.equal(check.passed, true, check.name);
     const uiChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARCHIVE_UI_TEST_SCRIPT, 'utf8'));
     for (const check of uiChecks) assert.equal(check.passed, true, check.name);
+    const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
+    for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
     if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
     const fixture = await window.webContents.executeJavaScript('globalThis.archiveUIFixture');
     const beforeReload = await window.webContents.executeJavaScript(`(async () => {
@@ -72,7 +74,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + 6} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + priorityChecks.length + 6} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);

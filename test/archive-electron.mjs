@@ -4,12 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { ArabicPriorityFixturePlugin } from './arabic-priority-plugin.mjs';
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'haruneko-archive-electron-'));
 const root = path.resolve('web');
 const { config } = await loadConfigFromFile({}, path.join(root, 'vite.config.ts'), root);
 const server = await createServer({ ...config, root, configFile: false,
-    plugins: [...config.plugins, { name: 'archive-integration-page', configureServer(server) {
+    plugins: [...config.plugins, ...(process.env.HARUNEKO_PRIORITY_CONNECTORS ? [ArabicPriorityFixturePlugin()] : []), { name: 'archive-integration-page', configureServer(server) {
         server.middlewares.use((request, response, next) => {
             if (request.url !== '/__archive-integration') return next();
             response.setHeader('Content-Type', 'text/html');
@@ -28,6 +29,7 @@ try {
         HARUNEKO_ARCHIVE_TEST_PRELOAD: path.resolve('app/electron/build/preload.js'),
         HARUNEKO_ARCHIVE_TEST_SCRIPT: path.resolve('test/archive-electron-renderer.mjs'),
         HARUNEKO_ARCHIVE_UI_TEST_SCRIPT: path.resolve('test/archive-ui-renderer.mjs'),
+        HARUNEKO_PRIORITY_TEST_SCRIPT: process.env.HARUNEKO_PRIORITY_CONNECTORS ? path.resolve('test/arabic-priority-renderer.mjs') : '',
     };
     delete env.ELECTRON_RUN_AS_NODE;
     const executable = path.resolve('node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : 'electron');

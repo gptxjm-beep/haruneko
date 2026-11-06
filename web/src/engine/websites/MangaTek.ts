@@ -2,6 +2,7 @@ import { Tags } from '../Tags';
 import icon from './MangaTek.webp';
 import { DecoratableMangaScraper } from '../providers/MangaPlugin';
 import * as Common from './decorators/Common';
+import { ReaderImageLink } from './decorators/ReaderImage';
 
 @Common.MangaCSS<HTMLImageElement>(/^{origin}\/manga\/[^/]+$/, 'img#mangaCover', (img, url) => ({ id: url.pathname, title: img.alt.trim() }))
 @Common.MangasMultiPageCSS<HTMLAnchorElement>('a.manga-card ', Common.PatternLinkGenerator('/manga-list?page={page}'), 0, anchor => ({
@@ -20,7 +21,7 @@ import * as Common from './decorators/Common';
         element.hydrate();
     });
 `, 1500)
-@Common.PagesSinglePageCSS('div.manga-page img')
+@Common.PagesSinglePageCSS('div.manga-page img', ReaderImageLink)
 @Common.ImageAjax()
 export default class extends DecoratableMangaScraper {
 

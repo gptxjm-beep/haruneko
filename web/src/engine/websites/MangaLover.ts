@@ -3,11 +3,12 @@ import icon from './MangaLover.webp';
 import { DecoratableMangaScraper } from '../providers/MangaPlugin';
 import * as Madara from './decorators/WordPressMadara';
 import * as Common from './decorators/Common';
+import { ReaderImageLink } from './decorators/ReaderImage';
 
 @Madara.MangaCSS(/^{origin}\/manga\/[^/]+\/$/, 'div.post-title h1')
 @Madara.MangasMultiPageCSS('div.post-title h3 a:not([target])', 0, '/manga/page/{page}/')
 @Madara.ChaptersSinglePageAJAXv2()
-@Madara.PagesSinglePageCSS()
+@Madara.PagesSinglePageCSS(undefined, ReaderImageLink)
 @Common.ImageAjax()
 export default class extends DecoratableMangaScraper {
 

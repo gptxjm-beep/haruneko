@@ -401,7 +401,7 @@ function ChapterPageExtractor(this: MangaScraper, image: HTMLImageElement): stri
  * @param chapter - A reference to the {@link Chapter} which shall be assigned as parent for the extracted pages
  * @param query - A CSS query to locate the elements from which the page information shall be extracted
  */
-export async function FetchPagesSinglePageCSS(this: MangaScraper, chapter: Chapter, query = queryPageListLinks): Promise<Page[]> {
+export async function FetchPagesSinglePageCSS(this: MangaScraper, chapter: Chapter, query = queryPageListLinks, extract?: (image: HTMLImageElement) => string): Promise<Page[]> {
     const uri = new URL(chapter.Identifier, this.URI);
     let request = new Request(uri.href);
     const [body] = await FetchCSS<HTMLBodyElement>(request, 'body');
@@ -414,7 +414,7 @@ export async function FetchPagesSinglePageCSS(this: MangaScraper, chapter: Chapt
         data = [...body.querySelectorAll<HTMLImageElement>(query)];
     }
     return data.map(element => {
-        const link = new URL(ChapterPageExtractor.call(this, element), request.url);
+        const link = extract ? DeProxify(new URL(extract(element), request.url)) : new URL(ChapterPageExtractor.call(this, element), request.url);
         return new Page(this, chapter, link, { Referer: uri.href });
     });
 }
@@ -424,12 +424,12 @@ export async function FetchPagesSinglePageCSS(this: MangaScraper, chapter: Chapt
  * The pages are extracted from the composed url based on the `Identifier` of the chapter and the `URI` of the website.
  * @param query - A CSS query to locate the elements from which the page information shall be extracted
  */
-export function PagesSinglePageCSS(query = queryPageListLinks) {
+export function PagesSinglePageCSS(query = queryPageListLinks, extract?: (image: HTMLImageElement) => string) {
     return function DecorateClass<T extends Common.Constructor>(ctor: T, context?: ClassDecoratorContext): T {
         Common.ThrowOnUnsupportedDecoratorContext(context);
         return class extends ctor {
             public async FetchPages(this: MangaScraper, chapter: Chapter): Promise<Page[]> {
-                return FetchPagesSinglePageCSS.call(this, chapter, query);
+                return FetchPagesSinglePageCSS.call(this, chapter, query, extract);
             }
         };
     };
