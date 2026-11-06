@@ -47,6 +47,10 @@ try {
             await fs.writeFile(process.env.HARUNEKO_HUB_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
         }
     });
+    ipcMain.handle('SearchTest::Memory', () => app.getAppMetrics().find(item => item.pid === window.webContents.getOSProcessId())?.memory ?? null);
+    ipcMain.handle('SearchTest::Capture', async () => {
+        if (process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
+    });
     window.webContents.on('console-message', event => console.log('renderer:', event.message));
     console.log('Loading isolated renderer');
     await window.loadURL(url);
@@ -60,6 +64,8 @@ try {
     for (const check of uiChecks) assert.equal(check.passed, true, check.name);
     const hubChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_ARABIC_HUB_TEST_SCRIPT, 'utf8'));
     for (const check of hubChecks) assert.equal(check.passed, true, check.name);
+    const searchChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SHARED_SEARCH_TEST_SCRIPT, 'utf8'));
+    for (const check of searchChecks) assert.equal(check.passed, true, check.name);
     const indexChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_TEST_SCRIPT, 'utf8'));
     for (const check of indexChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
@@ -109,6 +115,19 @@ try {
     assert.equal(indexRecovery.attempts, 2, 'An interrupted catalog attempt must remain in the bounded attempt budget');
     assert.equal(indexRecovery.savedA[0].id, 'a');
     assert.equal(indexRecovery.savedB[0].id, 'b');
+    const searchRecovery = await window.webContents.executeJavaScript(`(async () => {
+        const { LocalSearchController } = await import('/src/engine/search/LocalSearchController.ts');
+        const { SearchWorkerClient } = await import('/src/engine/search/SearchWorkerClient.ts');
+        const { StorageControllerBrowser } = await import('/src/engine/StorageControllerBrowser.ts');
+        const client = new SearchWorkerClient();
+        const controller = new LocalSearchController(new StorageControllerBrowser(), client, () => [{ id: 'search-a', title: 'A' }, { id: 'search-b', title: 'B' }]);
+        await controller.Initialize(); const preference = controller.State.Value.preference;
+        const result = await client.Search(preference, controller.Sites()); controller.Close();
+        return { preference, total: result.total, ids: result.groups.flatMap(group => group.rows).map(row => [row.siteId, row.mangaId]) };
+    })()`);
+    assert.equal(searchRecovery.preference.query, 'one piece', 'Search query survives renderer destruction');
+    assert.equal(searchRecovery.total, 3, 'Local accepted results survive renderer destruction without contacting connectors');
+    assert.equal(searchRecovery.ids.length, 3);
     assert.equal(restoredOrder, false, 'Classic ordering preference survives a real renderer reload in isolated IndexedDB');
     assert.equal(afterReload.progress.snapshot.state, 'interrupted', 'Renderer replacement must interrupt orphan runs without auto-resume');
     assert.equal(afterReload.progress.snapshot.chaptersStarted, beforeReload, 'Renderer replacement must preserve the cumulative budget');
@@ -119,7 +138,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + priorityChecks.length + 13} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + searchChecks.length + priorityChecks.length + 16} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);

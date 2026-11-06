@@ -4,10 +4,15 @@
     import { FilterHubSites, IsMultilingual, OpenPlugin, SiteObservation, type SiteScope } from '../../models/PluginPresentation';
     import { Store as UI } from '../../stores/Stores.svelte';
     import { GetSiteIndexController, ArabicCatalogSources, IndexStateLabel, IndexJobStateLabel, IndexErrorLabel } from '../../../../engine/catalog/SiteIndexController';
+    import SharedSearch from './SharedSearch.svelte';
+    import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
     import PluginOrder from './PluginOrder.svelte';
 
     let heading: HTMLHeadingElement;
+    let sectionChanged = false;
+    async function chooseSection(section: 'sites' | 'search') { sectionChanged = true; UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
     const indexer = GetSiteIndexController();
+    const searcher = GetLocalSearchController();
     let index = $state(indexer.State.Value);
     let activity = $state(indexer.Activity.Value);
     let actionError = $state('');
@@ -16,7 +21,7 @@
     const observeActivity = value => { activity = value; };
     indexer.State.Subscribe(observeIndex); indexer.Activity.Subscribe(observeActivity);
     onDestroy(() => { indexer.State.Unsubscribe(observeIndex); indexer.Activity.Unsubscribe(observeActivity); });
-    onMount(() => { heading?.focus(); void indexer.Initialize().then(() => { initialized = true; }).catch(() => { actionError = 'تعذر فتح سجل الفهرسة؛ لم يبدأ تحديث.'; }); });
+    onMount(() => { void searcher.Initialize().then(() => { if (!sectionChanged && searcher.State.Value.preference.active) UI.hubSection = 'search'; }); heading?.focus(); void indexer.Initialize().then(() => { initialized = true; }).catch(() => { actionError = 'تعذر فتح سجل الفهرسة؛ لم يبدأ تحديث.'; }); });
     async function command(action: 'start' | 'resume' | 'pause' | 'cancel') {
         actionError = '';
         try {
@@ -44,11 +49,14 @@
         <Button kind="secondary" onclick={() => (UI.page = 'media')}>العودة إلى Media List</Button>
     </header>
     <nav aria-label="أقسام مركز المانجا العربية">
-        <span aria-current="page">المواقع</span>
-        <span>البحث المشترك — غير متاح بعد</span>
+        <button type="button" aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>المواقع</button>
+        <button type="button" aria-current={UI.hubSection === 'search' ? 'page' : undefined} onclick={() => chooseSection('search')}>البحث المشترك</button>
         <span>المكتبة — غير متاحة بعد</span>
         <span>التنزيلات الانتقائية — غير متاحة بعد</span>
     </nav>
+    {#if UI.hubSection === 'search'}
+        <SharedSearch />
+    {:else}
     <p class="intro">اختر موقعًا لفتح قائمته وبحثه الأصلي في Media List. فتح المركز أو اختيار موقع لا يحدّث الفهارس ولا يبدأ تنزيلًا.</p>
     <section class="index-controls" aria-label="تحديث فهارس المواقع" data-testid="catalog-controls">
         <Button disabled={!initialized || activity.owned || !!index.job && !['finished', 'cancelled'].includes(index.job.state)} onclick={() => command('start')}>Update All Arabic Sites</Button>
@@ -111,6 +119,7 @@
         <span>{page} / {pages}</span>
         <Button kind="secondary" size="small" disabled={page >= pages} onclick={() => page++}>التالي</Button>
     </div>
+    {/if}
     <aside>الأرشفة الشاملة ما زالت تجريبية. Archive Site يحتفظ بجلساته وحدوده: خمس مانجات وعشرون محاولة فصل، واحتياطي مساحة 50 GiB على الأقل.</aside>
 </section>
 
@@ -119,6 +128,7 @@
     header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
     h1 { font-size: 1.8rem; } h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
     nav { display: flex; flex-wrap: wrap; gap: 1rem; border-bottom: 1px solid var(--cds-ui-03); padding: .75rem 0; }
+    nav button { background: transparent; border: none; font: inherit; cursor: pointer; padding: 0; color: var(--cds-text-01); }
     nav span { color: var(--cds-text-02); } nav [aria-current] { color: var(--cds-text-01); font-weight: bold; }
     .intro, .note, .preference, aside { margin: 1rem 0; line-height: 1.6; }
     .note, small { color: var(--cds-text-02); }

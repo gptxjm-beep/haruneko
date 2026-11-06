@@ -40,16 +40,32 @@ const VersionUpgrades = [
 
 const Version = VersionUpgrades.length;
 
-export async function OpenMediaDatabase(): Promise<IDBDatabase> {
+export class MediaDatabaseBlockedError extends Error {}
+
+export async function OpenMediaDatabase(options: { blockedTimeoutMs?: number } = {}): Promise<IDBDatabase> {
     const connection = indexedDB.open(DataBase, Version);
     return new Promise<IDBDatabase>((resolve, reject) => {
-        connection.onupgradeneeded = (event: IDBVersionChangeEvent) => {
-            const db = connection.result; // => event.target.result
-            for(let version = event.oldVersion; version < event.newVersion; version++) {
-                VersionUpgrades[version](db);
-            }
+        let expired = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        connection.onblocked = () => {
+            timer ??= setTimeout(() => {
+                expired = true;
+                reject(new MediaDatabaseBlockedError('Close an older application window before retrying the database upgrade'));
+            }, options.blockedTimeoutMs ?? 5000);
         };
-        connection.onsuccess = () => resolve(connection.result);
-        connection.onerror = () => reject(connection.error);
+        connection.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+            if (expired) { connection.transaction!.abort(); return; }
+            const db = connection.result;
+            for(let version = event.oldVersion; version < event.newVersion; version++) VersionUpgrades[version](db);
+        };
+        connection.onsuccess = () => {
+            clearTimeout(timer);
+            const db = connection.result;
+            if (expired) { db.close(); return; }
+            // Close only this connection; active transactions finish before a later upgrade can proceed.
+            db.onversionchange = () => db.close();
+            resolve(db);
+        };
+        connection.onerror = () => { clearTimeout(timer); if (!expired) reject(connection.error); };
     });
 }

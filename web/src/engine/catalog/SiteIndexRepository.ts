@@ -1,3 +1,4 @@
+import { NotifyCatalogChange } from './CatalogNotifications';
 import { Store } from '../StorageController';
 import { OpenMediaDatabase } from './MediaDatabase';
 import { EmptyIndexSite, IndexConflictError, IndexReviewError, IndexStorageError, type CatalogEntry, type CatalogCoverage, type IndexSite, type IndexJob, type IndexSnapshot, type IndexAttempt } from './SiteIndexContract';
@@ -33,6 +34,7 @@ export async function SaveManualMediaList(siteId: string, entries: unknown): Pro
         tx.objectStore(meta).put({ ...previous, revision: previous.revision + 1, count: Array.isArray(entries) ? entries.length : 0,
             state: 'review', lastSuccess: Array.isArray(entries) ? Date.now() : previous.lastSuccess, lastAttempt: Date.now(), error: null, coverage: { state: 'unknown', evidence: 'Explicit legacy manual refresh; completeness unproven' } });
     });
+    NotifyCatalogChange(siteId);
 }
 
 /** One accepted list in MediaLists. Candidate batches never become visible before the atomic publication. */
@@ -125,6 +127,7 @@ export class SiteIndexRepository {
             tx.objectStore(jobs).put(job);
             tx.objectStore(staging).delete(IDBKeyRange.bound([attempt.id, 0], [attempt.id, Number.MAX_SAFE_INTEGER]));
         });
+        NotifyCatalogChange(attempt.siteId);
     }
     public async Result(attempt: IndexAttempt, error: string, review: boolean, retry: boolean): Promise<void> {
         await Transaction([jobs, meta, Store.MediaLists, staging], async tx => {
@@ -136,6 +139,7 @@ export class SiteIndexRepository {
             tx.objectStore(meta).put({ ...site, state: item.state, error }); tx.objectStore(jobs).put(job);
             tx.objectStore(staging).delete(IDBKeyRange.bound([attempt.id, 0], [attempt.id, Number.MAX_SAFE_INTEGER]));
         });
+        NotifyCatalogChange(attempt.siteId);
     }
     public async State(id: string, state: IndexJob['state']): Promise<void> {
         await Transaction([jobs, meta, Store.MediaLists, staging], async tx => {
@@ -149,5 +153,6 @@ export class SiteIndexRepository {
             }
             tx.objectStore(staging).clear(); tx.objectStore(jobs).put(job);
         });
+        NotifyCatalogChange();
     }
 }
