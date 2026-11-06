@@ -26,16 +26,25 @@ try {
     window = new BrowserWindow({ show: false, width: 1280, height: 1000, webPreferences: preferences });
     let available = 1024n ** 4n;
     let blockPublication = false;
+    let publicationProbe = { injected: false, sameSpelling: false, sameIdentity: false };
     // All overrides live in this isolated test entry, never in the production main process.
     ipcMain.handle('ArchiveStorageTest::Capacity', (_event, state) => { available = state === 'low' ? 0n : 1024n ** 4n; });
-    ipcMain.handle('ArchiveStorageTest::BlockPublication', () => { blockPublication = true; });
+    ipcMain.handle('ArchiveStorageTest::BlockPublication', () => { blockPublication = true; publicationProbe = { injected: false, sameSpelling: false, sameIdentity: false }; });
+    ipcMain.handle('ArchiveStorageTest::PublicationProbe', () => publicationProbe);
     service = new ArchiveIPC(window, new URL(url).origin, { storagePolicy: { reserveBytes: 1024n ** 2n, metadataHeadroomBytes: 1024n ** 2n },
         storageProbe: async directory => {
             const observed = await ProbeArchiveVolume(directory);
-            if (blockPublication && directory === path.join(profile, 'archive', 'staging')) {
-                const entries = await fs.readdir(directory);
-                for (const name of entries) if ((await fs.stat(path.join(directory, name))).size > 0) {
-                    blockPublication = false; available = 0n; break;
+            if (blockPublication) {
+                const expected = path.join(profile, 'archive', 'staging');
+                const target = await fs.stat(expected, { bigint: true });
+                if (observed.identity === `${target.dev}:${target.ino}`) {
+                    const entries = await fs.readdir(directory);
+                    for (const name of entries) if ((await fs.stat(path.join(directory, name))).size > 0) {
+                        publicationProbe = { injected: true, sameSpelling: directory === expected, sameIdentity: true };
+                        console.log(`Staging fault fixture identity matched; identical path spelling: ${publicationProbe.sameSpelling}`);
+                        if (process.env.GITHUB_ACTIONS) console.log(`::notice title=Staging fault fixture::Same native directory identity; identical path spelling: ${publicationProbe.sameSpelling}`);
+                        blockPublication = false; available = 0n; break;
+                    }
                 }
             }
             return { ...observed, freeBytes: available, usableBytes: available };

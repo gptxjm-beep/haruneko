@@ -142,6 +142,8 @@
     const beforeStaged = visited.length;
     await ipcRenderer.invoke('ArchiveStorageTest::BlockPublication');
     const blockedPublication = await stagedManager.Start();
+    const injected = await ipcRenderer.invoke('ArchiveStorageTest::PublicationProbe');
+    record('Staged publication capacity fault targets the native directory identity rather than its path spelling', injected.injected && injected.sameIdentity);
     record('Low space before native publication preserves the staged chapter and pauses', blockedPublication.state === 'paused' && blockedPublication.storageError.code === 'low-space' && visited.length === beforeStaged + 1);
     await ipcRenderer.invoke('ArchiveStorageTest::Capacity', 'enough');
     const publishedAfterResume = await stagedManager.Resume();
