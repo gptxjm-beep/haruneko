@@ -60,6 +60,9 @@ try {
     ipcMain.handle('SearchTest::Capture', async () => {
         if (process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
     });
+    ipcMain.handle('QueueTest::Capture', async () => {
+        if (process.env.HARUNEKO_QUEUE_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_QUEUE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
+    });
     window.webContents.on('console-message', event => console.log('renderer:', event.message));
     console.log('Loading isolated renderer');
     await window.loadURL(url);

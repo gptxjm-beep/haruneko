@@ -135,5 +135,36 @@
     catalog = await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier);
     const catalogState = (await catalogRepository.Snapshot()).sites.find(site => site.siteId === catalogSite.Identifier);
     record('A later incomplete bulk refresh preserves the larger manual catalog and explicitly marks partial source coverage', catalog.length === 399 && catalogState.coverage.state === 'partial' && catalogState.state === 'succeeded');
+    const { DownloadMangaDetails } = await import('/src/engine/archive/MangaDetails.ts');
+    const detailSaves = [];
+    const detailClient = new ArchiveClient(async command => {
+        if (command.operation === 'queue-details-save') detailSaves.push(command);
+        return { ok: true, value: command.operation === 'queue-details-inspect' ? { coverHealthy: false } : command.operation === 'ui-progress' ? { registeredChapters: 2 } : 'Partial' };
+    });
+    const detailsId = JSON.stringify({ post: '0', slug: '/manga/catalog-0/' });
+    Respond('https://3asq.online/manga/catalog-0/', { body: '<meta property="og:title" content="Known manga"><meta property="og:description" content="Known description"><meta property="og:image" content="https://details-fixture.invalid/cover.png"><script type="application/ld+json">{"@type":"ComicSeries","alternateName":["ون بيس","One Piece"],"author":{"name":"Known author"}}</script>' });
+    Respond('https://details-fixture.invalid/cover.png', { body: '<html>Unavailable</html>', type: 'image/png' });
+    await DownloadMangaDetails(catalogSite, { seq: 999, siteId: catalogSite.Identifier, mangaId: detailsId, title: 'Known manga', siteName: catalogSite.Title, sessionId: failedId, scope: { mode: 'all' } }, detailClient, new AbortController().signal);
+    record('Optional details retain available text and real aliases when a cover is HTML, independently of chapter outcomes', detailSaves[0].text.includes('Known description') && detailSaves[0].text.includes('Known author') && detailSaves[0].text.includes('ون بيس') && detailSaves[0].cover === undefined && detailSaves[0].partial === true && failure.outcome === 'failed');
+    Respond('https://details-fixture.invalid/cover.png', { body: image, type: 'application/octet-stream' });
+    await DownloadMangaDetails(catalogSite, { seq: 999, siteId: catalogSite.Identifier, mangaId: detailsId, title: 'Known manga', siteName: catalogSite.Title, sessionId: failedId, scope: { mode: 'all' } }, detailClient, new AbortController().signal);
+    record('Optional covers use the shared image validator and correct signature-derived extension', detailSaves[1].cover?.length > 0 && detailSaves[1].extension === 'png' && !detailSaves[1].partial);
+    respondCatalog(true); await update();
+    record('Explicit source aliases persist in the canonical catalog after a full observation refresh', (await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier)).find(row => row.id === detailsId).aliases.includes('ون بيس'));
+    const { ExtractMangaDetails } = await import('/src/engine/archive/MangaDetails.ts');
+    const related = new DOMParser().parseFromString('<script type="application/ld+json">[{"@type":"Book","url":"https://3asq.online/manga/catalog-0/","alternateName":"Real alias"},{"@type":"Book","url":"https://3asq.online/manga/other/","alternateName":"Unrelated alias"}]</script>', 'text/html');
+    record('Metadata aliases from a different linked work are never assigned to the chosen manga', ExtractMangaDetails(related, new URL('https://3asq.online/manga/catalog-0/')).aliases.join(',') === 'Real alias');
+    const { default: MangaSpark } = await import('/src/engine/websites/MangaSpark.ts');
+    const spark = new MangaSpark().CreatePlugin(browserStore, new SettingsManager(browserStore)); spark.Initialize = async () => {};
+    Respond('https://sparkmanga.net/wp-admin/admin-ajax.php', { body: async request => {
+        const page = Number(new URLSearchParams(await request.text()).get('page'));
+        return Array.from({ length: Math.max(0, Math.min(250, 20492 - page * 250)) }, (_, i) => `<div class="page-item-detail"><div data-post-id="${page * 250 + i}"></div><div class="post-title"><h3><a href="https://sparkmanga.net/manga/fixture-${page * 250 + i}/">Fixture ${page * 250 + i}</a></h3></div></div>`).join('');
+    } });
+    let observed = 0, responseStatus;
+    const sparkIndexer = new SiteIndexManager(catalogRepository, () => [{ id: spark.Identifier, ObserveProgress: listener => spark.ObserveCatalogProgress((count, status) => { observed += count; if (status) responseStatus = status; listener(count, status); }), Catalog: signal => new EngineArchiveSource(spark).Catalog(signal) }], navigator.locks, { timeoutMs: 20000, delayMs: 1, retryMs: 1 });
+    await sparkIndexer.Start(); const sparkDeadline = Date.now() + 25000;
+    while (sparkIndexer.Activity.Value.owned) { if (Date.now() > sparkDeadline) throw new Error('Synthetic MangaSpark catalog did not settle'); await new Promise(resolve => setTimeout(resolve, 10)); }
+    record('Native MangaSpark AJAX pagination publishes 20492 isolated titles and reports real page progress and HTTP status', observed === 20492 && responseStatus === 200 && (await browserStore.LoadPersistent(Store.MediaLists, spark.Identifier)).length === 20492);
+    record('A full synthetic MangaSpark refresh still does not prove source completeness', (await catalogRepository.Snapshot()).sites.find(site => site.siteId === spark.Identifier).coverage.state === 'unknown');
     return checks;
 })()

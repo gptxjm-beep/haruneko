@@ -8,10 +8,16 @@
     import { GetSelectiveQueueRunner } from '../../../../engine/archive/SelectiveQueueRunner';
     import type { ArchivePreferences } from '../../../../../../app/electron/src/archive/ArchiveUIContract';
     import PreferencesForm from '../archiving/ArchivePreferencesForm.svelte';
+    import QueueChapters from './QueueChapters.svelte';
+    import { StorageControllerBrowser } from '../../../../engine/StorageControllerBrowser';
+    import { Store } from '../../../../engine/StorageController';
     let { selections = false }: { selections?: boolean } = $props();
     const queue = GetSelectiveQueueController();
     let view = $state(queue.State.Value), rows = $state<(SelectedManga | QueueManga)[]>([]), missing = $state<boolean[]>([]), page = $state(0), cursors = $state([0]);
     let busy = $state(false);
+    let downloadDetails = $state(false);
+    const storage = new StorageControllerBrowser();
+    onMount(() => { void storage.LoadPersistent<boolean>(Store.Settings, 'arabic-download-manga-details').then(value => { downloadDetails = value === true; }).catch(() => {}); });
     let preferences: ArchivePreferences = $state(), rootLabel = $state(''), confirmed = $state(false), setup = $state(false);
     let timer: ReturnType<typeof setInterval>;
     let loadSerial = 0, polling = false;
@@ -39,7 +45,8 @@
         void queue.Refresh().catch(error => queue.Error(error));
     }
     async function scope(row: QueueManga, mode: 'all' | 'missing' | 'range') {
-        await queue.Edit(row.seq, 'up', mode === 'range' ? { mode, from: 1, to: 1 } : { mode });
+        const policy = { order: row.scope.order ?? 'source', direction: row.scope.direction, sourceIds: row.scope.sourceIds };
+        await queue.Edit(row.seq, 'up', mode === 'range' ? { mode, from: 1, to: 1, ...policy } : { mode, ...policy });
     }
 </script>
 <section data-testid={selections ? 'personal-selections' : 'personal-queue'}>
@@ -49,6 +56,7 @@
         <p>Selected: {view.summary?.selected ?? 0} • Download entries: {view.summary?.queued ?? 0}. Adding entries does not start downloads.</p>
         {#if selections}<button disabled={busy} onclick={() => action(() => queue.Add())}>Add Selected to Queue</button>{/if}
         {#if !selections}
+            <label><input type="checkbox" checked={downloadDetails} disabled={view.summary?.state === 'Running'} onchange={event => { downloadDetails = event.currentTarget.checked; void storage.SavePersistent(downloadDetails, Store.Settings, 'arabic-download-manga-details').catch(error => queue.Error(error)); }} />Download Manga Details</label>
             <p data-testid="queue-budget">Status: {view.summary?.state} — {view.summary?.reason}. Cumulative budget: {view.summary?.mangasUsed ?? 0}/5 manga, {view.summary?.chaptersStarted ?? 0}/20 chapter attempts. Resume and readding entries do not reset this budget.</p>
             <details><summary>Run details</summary><p data-testid="queue-run-membership">Waiting for a later confirmation: {view.summary?.waitingNextRun ?? 0}. Each confirmed run has fixed membership. Later additions wait for another run; resume preserves the same group.</p>
             <p data-testid="queue-scope-notice">{QueueScopeNotice}</p></details>
@@ -58,7 +66,7 @@
             {#if setup && preferences}
                 <div class="setup" data-testid="queue-setup">
                     <h3>Confirm a limited run</h3>
-                    <p>Choose scopes before starting. Unverified ordering stays in Review. Destination and policy are fixed after the first run. Ranges use verified oldest-first positions, not numbers guessed from titles. Individual chapter selection is not available.</p>
+                    <p>Choose scopes before starting. Source Order accepts the connector sequence without claiming chronology. Chronological ordering and numeric ranges need a proven or explicitly confirmed direction. Destination and safety policy stay fixed after the first run. Individual chapter selections use stable IDs.</p>
                     {#if view.summary?.preferences}<p>Saved destination and policy: {rootLabel} • {preferences.format} • Reserve {preferences.reserveGiB} GiB. Languages: {preferences.policy.languages.join(', ') || 'All known languages'}.</p>{:else}<PreferencesForm bind:preferences bind:rootLabel />{/if}
                     <label><input type="checkbox" bind:checked={confirmed} />Start this limited run now, keeping at least 50 GiB in reserve.</label>
                     <button disabled={!confirmed || busy} onclick={start}>Start Downloads</button><button onclick={() => setup = false}>Close without starting</button>
@@ -75,6 +83,8 @@
                     <button disabled={busy} onclick={() => action(() => queue.Select(row, false))}>Remove selection</button>
                     <button disabled={busy} onclick={() => action(() => queue.Add(row))}>Add to Queue</button>
                 {:else if 'state' in row}
+                    {#if row.detailsState}<p>Additional details: {row.detailsState}</p>{/if}
+                    <QueueChapters {row} running={view.summary?.state === 'Running' || busy} onedit={action} />
                     <p class="item-state"><strong>{row.state}</strong>{#if row.progress} · {row.progress.verified}/{row.progress.registered} verified chapters{/if}</p>
                     {#if row.progress?.storage}<p role="alert">Storage stopped: {row.progress.storage}. Completed files are safe. Resolve the storage issue before resuming.</p>{/if}
                     <details><summary>Details and scope</summary><p dir="auto">Source ID: <bdi>{row.mangaId}</bdi></p><p>{row.reason}</p>

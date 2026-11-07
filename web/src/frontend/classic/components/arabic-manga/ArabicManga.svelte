@@ -8,6 +8,7 @@
     import PersonalQueue from './PersonalQueue.svelte';
     import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
     import PluginOrder from './PluginOrder.svelte';
+    import { ArchiveClient } from '../../../../engine/archive/ArchiveClient';
 
     let heading: HTMLHeadingElement;
     async function chooseSection(section: 'sites' | 'search' | 'selections' | 'queue') { UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
@@ -17,6 +18,10 @@
     let activity = $state(indexer.Activity.Value);
     let actionError = $state('');
     let initialized = $state(false);
+    async function openLogs() {
+        try { const error = await new ArchiveClient().Request<string>({ operation: 'catalog-open-logs' }); if (error) throw new Error('Folder unavailable'); }
+        catch { actionError = 'Cannot open the diagnostic logs folder.'; }
+    }
     const observeIndex = value => { index = value; };
     const observeActivity = value => { activity = value; };
     indexer.State.Subscribe(observeIndex); indexer.Activity.Subscribe(observeActivity);
@@ -60,6 +65,7 @@
         <span>{index.sites.filter(site => eligible.has(site.siteId) && site.count > 0).length} saved libraries / {eligible.size} Arabic sites</span>
         {#if index.job}<span role="status">{IndexJobStateLabel[index.job.state]} · {completed}/{index.job.items.length} sites · {index.job.items.length - completed} remaining</span>{/if}
         {#if index.job?.current}<strong>Updating: {HakuNeko.PluginController.WebsitePlugins.find(site => site.Identifier === index.job.current)?.Title ?? index.job.current}</strong>{/if}
+        {#if activity.progress && activity.progress.siteId === index.job?.current}<span>Observed titles: {activity.progress.observed} (not yet published)</span>{/if}
     </div>
     {#if activity.draining}<p role="status">Waiting for an older connector request to settle before another site can start.</p>{/if}
     {#if actionError || activity.error}<p role="alert">{actionError || activity.error}</p>{/if}
@@ -68,6 +74,7 @@
     {:else if UI.hubSection === 'queue'}
         <PersonalQueue />
     {:else}
+        {#if globalThis.ipcRenderer?.invoke}<Button kind="ghost" size="small" onclick={openLogs}>Open Logs</Button>{/if}
         <div class="filters"><label>Find a site<input type="search" data-testid="arabic-site-filter" bind:value={query} placeholder="Name, ID or host" /></label>
             <label>Language support<select bind:value={scope} data-testid="arabic-site-scope"><option value="arabic">Explicit Arabic support</option><option value="multilingual-unconfirmed">Multilingual — Arabic unconfirmed</option></select></label></div>
         <div class="preference"><PluginOrder english /><small>Language tags identify sources; catalog availability does not certify image downloads.</small></div>
