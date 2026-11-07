@@ -17,6 +17,49 @@ function Fixture() {
     return { db, queue, reference, preferences, work, ui };
 }
 describe('Persistent selective queue', () => {
+    it('Should retain an intentionally empty selection without opening a task, spending budget or treating it as a source failure', () => {
+        const f = Fixture();
+        try {
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('empty') });
+            const row = f.queue.Execute({ operation: 'queue-list' })[0];
+            f.queue.Execute({ operation: 'queue-edit', seq: row.seq, action: 'up', scope: { mode: 'selected', ids: [], order: 'source' } });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            expect(f.queue.Execute({ operation: 'queue-next' })).toBeNull(); expect(f.queue.Summary().state).toBe('Drained');
+            expect(f.db.prepare('SELECT count(*) n FROM sessions').get()!.n).toBe(0); expect(f.queue.Budget().mangasUsed).toBe(0);
+            f.queue.Execute({ operation: 'queue-edit', seq: row.seq, action: 'up', scope: { mode: 'all', order: 'source' } });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            expect(f.queue.Execute({ operation: 'queue-next' }).seq).toBe(row.seq);
+        } finally { f.db.close(); }
+    });
+    it('Should repair only a legacy unknown-order review after an explicit source policy while preserving language review, session and budget', () => {
+        const f = Fixture();
+        try {
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('a') });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            const item = f.queue.Execute({ operation: 'queue-next' });
+            f.work.Execute({ operation: 'archive-run-open', sessionId: item.sessionId, policy: f.preferences.policy });
+            f.work.Execute({ operation: 'archive-manga-begin', sessionId: item.sessionId, mangaId: 'a' });
+            f.work.Execute({ operation: 'archive-manga-list', sessionId: item.sessionId, mangaId: 'a', order: 'unknown', orderEvidence: 'Old source direction unknown', evidence: { state: 'unknown', evidence: 'Fixture' }, chapters: [
+                { id: 'one', title: 'One', position: 0, language: 'ar' }, { id: 'two', title: 'Two', position: 1, language: null }, { id: 'three', title: 'Three', position: 2, language: 'ar' }
+            ] });
+            f.work.Execute({ operation: 'archive-run-state', sessionId: item.sessionId, state: 'review', reason: 'Unknown order' });
+            f.queue.Execute({ operation: 'queue-result', seq: item.seq });
+            f.queue.Execute({ operation: 'queue-stop', state: 'Paused', reason: 'Explicit policy review' });
+            const before = f.queue.Budget();
+            f.queue.Execute({ operation: 'queue-edit', seq: item.seq, action: 'up', scope: { mode: 'selected', order: 'source', ids: ['one', 'two'], sourceIds: ['one', 'two', 'three'] } });
+            expect(f.db.prepare('SELECT id,state,reason FROM archive_work ORDER BY position').all()).toMatchObject([
+                { id: 'one', state: 'pending' }, { id: 'two', state: 'review', reason: 'unknown-language' }, { id: 'three', state: 'excluded', reason: 'user-selection-exclusion' }
+            ]);
+            expect(f.queue.Budget()).toEqual(before);
+            expect(f.queue.Execute({ operation: 'queue-list' })[0].sessionId).toBe(item.sessionId);
+            expect(() => f.queue.Execute({ operation: 'queue-edit', seq: item.seq, action: 'up', scope: { mode: 'selected', ids: ['missing'], order: 'source', sourceIds: ['one', 'two', 'three'] } })).toThrow('does not contain');
+            expect(() => f.queue.Execute({ operation: 'queue-edit', seq: item.seq, action: 'up', scope: { mode: 'all', order: 'source', sourceIds: ['one', 'two', 'three', 'unregistered'] } })).toThrow('cannot expand');
+            f.db.exec("UPDATE archive_work SET state='healthy',reason='' WHERE id='one'; UPDATE session_chapters SET local_state='healthy' WHERE chapter_key=(SELECT chapter_key FROM archive_work WHERE id='one')");
+            f.queue.Execute({ operation: 'queue-edit', seq: item.seq, action: 'up', scope: { mode: 'selected', order: 'source', ids: ['two'], sourceIds: ['one', 'two', 'three'] } });
+            expect(f.db.prepare("SELECT state FROM archive_work WHERE id='one'").get()!.state).toBe('excluded');
+            expect(f.db.prepare("SELECT local_state FROM session_chapters WHERE chapter_key=(SELECT chapter_key FROM archive_work WHERE id='one')").get()!.local_state).toBe('healthy');
+        } finally { f.db.close(); }
+    });
     it('Should freeze confirmed membership and leave a late individual or bulk addition for another Start', () => {
         const f = Fixture();
         try {

@@ -4,6 +4,7 @@ import { Tags } from '../Tags';
 import { SiteIndexRepository } from './SiteIndexRepository';
 import { SiteIndexManager } from './SiteIndexManager';
 import type { IndexSiteState, IndexJob } from './SiteIndexContract';
+import { ArchiveClient } from '../archive/ArchiveClient';
 
 export const IndexStateLabel: Record<IndexSiteState, string> = { queued: 'Queued', updating: 'Updating', succeeded: 'Catalog saved',
     failed: 'Update failed', stale: 'Older catalog retained', cancelled: 'Cancelled', review: 'Needs review' };
@@ -19,9 +20,10 @@ export function IndexErrorLabel(code: string): string {
 }
 export function ArabicCatalogSources(sites: readonly unknown[]) {
     return sites.filter((site): site is MangaPlugin => site instanceof MangaPlugin && site.Tags.Value.some(tag => tag.Category === Tags.Language.Arabic.Category && tag.Title === Tags.Language.Arabic.Title))
-        .map(site => ({ id: site.Identifier, Catalog: (signal: AbortSignal) => new EngineArchiveSource(site).Catalog(signal), Published: () => site.InvalidateMediaListCache() }));
+        .map(site => ({ id: site.Identifier, name: site.Title, ObserveProgress: (listener: (count: number, status?: number) => void) => site.ObserveCatalogProgress(listener), Catalog: (signal: AbortSignal) => new EngineArchiveSource(site).Catalog(signal), Published: () => site.InvalidateMediaListCache() }));
 }
 let controller: SiteIndexManager | undefined;
 export function GetSiteIndexController(): SiteIndexManager {
-    return controller ??= new SiteIndexManager(new SiteIndexRepository(), () => ArabicCatalogSources(HakuNeko.PluginController.WebsitePlugins), navigator.locks);
+    return controller ??= new SiteIndexManager(new SiteIndexRepository(), () => ArabicCatalogSources(HakuNeko.PluginController.WebsitePlugins), navigator.locks, undefined,
+        async (runId, event) => { if (globalThis.ipcRenderer?.invoke) await new ArchiveClient().Request({ operation: 'catalog-log', runId, event }); });
 }

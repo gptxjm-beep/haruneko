@@ -1,9 +1,10 @@
-export interface CatalogEntry { id: string; title: string; }
+export interface CatalogEntry { id: string; title: string; aliases?: string[]; }
 export interface CatalogCoverage { state: 'complete' | 'partial' | 'unknown' | 'unsupported'; evidence: string; }
 export type IndexSiteState = 'queued' | 'updating' | 'succeeded' | 'failed' | 'stale' | 'cancelled' | 'review';
 export interface IndexSite {
     siteId: string; revision: number; count: number; lastSuccess: number | null; lastAttempt: number | null;
     state: IndexSiteState; error: string | null; coverage: CatalogCoverage; discovered: number | null;
+    comparison?: { added: number; changed: number; unchanged: number; retained: number };
 }
 export interface IndexJobItem { siteId: string; state: IndexSiteState; attempts: number; }
 export interface IndexJob {

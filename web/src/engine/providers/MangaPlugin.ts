@@ -5,6 +5,7 @@ import { type Priority, TaskPool } from '../taskpool/TaskPool';
 import { MediaContainer, StoreableMediaContainer, MediaItem, MediaScraper } from './MediaPlugin';
 import icon from '../../img/manga.webp';
 import { NotImplementedError } from '../Error';
+import { TraceCatalogRequest } from '../catalog/CatalogNetwork';
 import { CreateChapterExportRegistry } from '../exporters/MangaExporterRegistry';
 import { Observable } from '../Observable';
 import type { Tag } from '../Tags';
@@ -101,6 +102,28 @@ export class DecoratableMangaScraper extends MangaScraper {
 
 export class MangaPlugin extends MediaContainer<Manga> {
 
+    private catalogFlight?: { pending: Promise<Manga[]>; controller: AbortController; consumers: Set<object> };
+    public get CatalogSignal(): AbortSignal | undefined { return this.catalogFlight?.controller.signal; }
+    private readonly catalogObservers = new Set<(count: number, status?: number) => void>();
+    public ObserveCatalogProgress(listener: (count: number, status?: number) => void): () => void { this.catalogObservers.add(listener); return () => this.catalogObservers.delete(listener); }
+    public TraceCatalog(request: Request): void { TraceCatalogRequest(request, status => { for (const listener of this.catalogObservers) listener(0, status); }); }
+    public ReportCatalogProgress(count: number): void { if (count > 0) for (const listener of this.catalogObservers) listener(count); }
+    private FetchCatalog(signal?: AbortSignal): Promise<Manga[]> {
+        signal?.throwIfAborted();
+        if (!this.catalogFlight) {
+            const pending = Promise.resolve().then(() => this.scraper.FetchMangas(this));
+            const flight = this.catalogFlight = { pending, controller: new AbortController(), consumers: new Set<object>() };
+            void pending.finally(() => { if (this.catalogFlight === flight) this.catalogFlight = undefined; }).catch(() => {});
+        }
+        const flight = this.catalogFlight, consumer = {};
+        flight.consumers.add(consumer);
+        const abort = () => { flight.consumers.delete(consumer); if (!flight.consumers.size) flight.controller.abort(signal?.reason); };
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+        // Keep ownership until the physical chain settles, including non-cooperative legacy transports.
+        return flight.pending.then(entries => { signal?.throwIfAborted(); return entries; }).finally(() => { signal?.removeEventListener('abort', abort); flight.consumers.delete(consumer); });
+    }
+
     private readonly _settings: ISettings;
 
     public constructor(private readonly storageController: StorageController, private readonly settingsManager: SettingsManager, private readonly scraper: MangaScraper) {
@@ -161,7 +184,7 @@ export class MangaPlugin extends MediaContainer<Manga> {
     }
 
     protected async PerformUpdate(): Promise<Manga[]> {
-        const entries = await this.scraper.FetchMangas(this);
+        const entries = await this.FetchCatalog();
         const mangas = entries.map(entry => {
             return { id: entry.Identifier, title: entry.Title };
         });
@@ -170,9 +193,9 @@ export class MangaPlugin extends MediaContainer<Manga> {
     }
 
     /** Archive discovery uses the engine scraper without writing an unbudgeted UI cache into IndexedDB. */
-    public async FetchArchiveEntries(): Promise<Manga[]> {
+    public async FetchArchiveEntries(signal?: AbortSignal): Promise<Manga[]> {
         await this.Initialize();
-        return this.scraper.FetchMangas(this);
+        return this.FetchCatalog(signal);
     }
 }
 

@@ -4,12 +4,15 @@ import type { SiteIndexRepository } from './SiteIndexRepository';
 
 export interface CatalogSource {
     id: string;
+    name?: string;
+    ObserveProgress?(listener: (count: number, status?: number) => void): () => void;
     Catalog(signal: AbortSignal): AsyncIterable<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage }>;
     Published?(): void;
 }
 export interface CatalogLock {
     request<T>(name: string, options: { ifAvailable: true }, callback: (lock: unknown) => Promise<T>): Promise<T>;
 }
+interface CatalogPolicy { timeoutMs: number; delayMs: number; retryMs: number; initialTimeoutMs?: number; }
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
     const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason); };
     const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
@@ -29,13 +32,13 @@ function Failure(error: unknown): { code: string; review: boolean; retry: boolea
     if (error instanceof IndexConflictError) return { code: 'catalog-conflict: a newer manual update or job state was preserved', review: true, retry: false };
     const value = error as Error;
     if (value?.name === 'TimeoutError') return { code: 'catalog-timeout', review: false, retry: true };
-    if (/403|401|429|captcha|access.denied|not.implemented/i.test(value?.message ?? '')) return { code: 'catalog-access-or-capability-unavailable', review: true, retry: false };
+    if (/403|401|429|captcha|access.denied|not.implemented|forbidden|cloudflarechallenge|vercelchallenge/i.test(`${value?.name} ${value?.message}`)) return { code: 'catalog-access-or-capability-unavailable', review: true, retry: false };
     return { code: 'catalog-fetch-or-storage-failed', review: false, retry: true };
 }
 /** Metadata only. One request chain and one origin-wide lock; no DownloadManager or chapter/image entry point. */
 export class SiteIndexManager {
     public readonly State = new Observable<IndexSnapshot>({ job: null, sites: [] });
-    public readonly Activity = new Observable({ owned: false, draining: false, error: '' });
+    public readonly Activity = new Observable<{ owned: boolean; draining: boolean; error: string; progress?: { siteId: string; observed: number } }>({ owned: false, draining: false, error: '' });
     private stop = new AbortController();
     private requested: 'paused' | 'cancelled' | undefined;
     private id: string | undefined;
@@ -44,8 +47,11 @@ export class SiteIndexManager {
     private iterator: AsyncIterator<unknown> | undefined;
     private initializing: Promise<void> | undefined;
     private lastNotification = 0;
+    private phase = 'connector-fetch';
     constructor(public readonly Repository: SiteIndexRepository, private readonly sources: () => readonly CatalogSource[], private readonly locks: CatalogLock,
-        private readonly policy = { timeoutMs: 60_000, delayMs: 1000, retryMs: 3000 }) {}
+        private readonly policy: CatalogPolicy = { timeoutMs: 60_000, initialTimeoutMs: 180_000, delayMs: 1000, retryMs: 3000 },
+        private readonly diagnostic: (runId: string, event: Record<string, unknown>) => Promise<void> = async () => {}) {}
+    private Log(event: Record<string, unknown>): void { if (this.id) void this.diagnostic(this.id, event).catch(() => {}); }
 
     public async Refresh(): Promise<void> { this.State.Value = await this.Repository.Snapshot(); }
     public Initialize(): Promise<void> {
@@ -85,8 +91,11 @@ export class SiteIndexManager {
                 try {
                     const ids = this.sources().map(source => source.id).filter(id => !siteId || id === siteId);
                     if (!resume && !ids.length) throw new IndexConflictError('The selected Arabic manga connector is unavailable');
+                    const previous = await this.Repository.Snapshot();
                     const job = resume ? await this.Repository.Resume() : await this.Repository.Start(ids);
                     this.id = job.id; await this.Refresh(); ready = true; resolve();
+                    this.Log({ event: resume ? 'resume' : 'begin', type: 'full-refresh', scope: siteId ? 'single' : 'bulk', sites: job.items.length });
+                    for (const item of job.items) this.Log({ event: 'previous-index', siteId: item.siteId, index: previous.sites.find(site => site.siteId === item.siteId) ?? { state: 'untracked', lastSuccess: null } });
                     await this.Run();
                 } finally {
                     // Legacy FetchMangas may ignore AbortSignal. Never overlap a new site with that live chain.
@@ -96,9 +105,11 @@ export class SiteIndexManager {
                 }
             }).catch(async error => {
                 this.Activity.Value = { ...this.Activity.Value, error: error instanceof IndexConflictError ? error.message : 'Catalog repository unavailable; progress requires recovery' };
+                this.Log({ event: 'service-error', code: 'catalog-recovery-required' });
                 if (!ready) reject(error);
                 else { await this.Repository.Interrupt().catch(() => {}); await this.Refresh().catch(() => {}); }
-            }).finally(() => { this.Activity.Value = { ...this.Activity.Value, owned: false, draining: false }; });
+            }).finally(() => { this.Log({ event: 'summary', state: this.State.Value.job?.state, sites: this.State.Value.job?.items.length,
+                results: this.State.Value.job?.items.reduce((counts, item) => ({ ...counts, [item.state]: (counts[item.state] ?? 0) + 1 }), {} as Record<string, number>) }); this.Activity.Value = { ...this.Activity.Value, owned: false, draining: false, progress: undefined }; });
         });
     }
     private async Run(): Promise<void> {
@@ -108,22 +119,41 @@ export class SiteIndexManager {
             if (!item) { await this.Repository.State(job.id, 'finished'); await this.Refresh(); return; }
             const attempt = await this.Repository.Begin(job.id, item.siteId); await this.Refresh();
             const source = this.sources().find(source => source.id === item.siteId);
+            const started = Date.now(); let observed = 0, lastProgressLog = 0, lastHTTP: number | null = null;
+            this.Log({ event: 'attempt-begin', siteId: item.siteId, siteName: source?.name, attempt: item.attempts + 1, previous: this.State.Value.sites.find(site => site.siteId === item.siteId), idleTimeoutMs: this.policy.timeoutMs });
             const controller = new AbortController();
             const abort = () => controller.abort(this.stop.signal.reason);
             this.stop.signal.addEventListener('abort', abort, { once: true });
             if (this.stop.signal.aborted) abort();
-            const timeout = setTimeout(() => controller.abort(new DOMException('Catalog deadline exceeded', 'TimeoutError')), this.policy.timeoutMs);
+            let timeout: ReturnType<typeof setTimeout>;
+            const resetDeadline = (initial = false) => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(new DOMException('Catalog idle deadline exceeded', 'TimeoutError')), initial ? this.policy.initialTimeoutMs ?? this.policy.timeoutMs : this.policy.timeoutMs); };
+            resetDeadline(true);
+            const maximum = setTimeout(() => controller.abort(new DOMException('Catalog maximum duration exceeded', 'TimeoutError')), 30 * 60_000);
+            const unsubscribe = source?.ObserveProgress?.((count, status) => {
+                if (Number.isInteger(status) && status >= 100 && status <= 599) lastHTTP = status;
+                if (!Number.isSafeInteger(count) || count <= 0 || controller.signal.aborted) return;
+                observed += count; resetDeadline();
+                this.Activity.Value = { ...this.Activity.Value, progress: { siteId: item.siteId, observed } };
+                if (Date.now() - lastProgressLog >= 1000) { lastProgressLog = Date.now(); this.Log({ event: 'progress', siteId: item.siteId, observed, elapsedMs: Date.now() - started }); }
+            });
             try {
                 if (!source) throw new IndexReviewError('The original Arabic connector is unavailable');
                 controller.signal.throwIfAborted();
+                this.phase = 'connector-fetch';
                 this.iterator = source.Catalog(controller.signal)[Symbol.asyncIterator]();
-                await this.Collect(attempt, controller.signal);
+                await this.Collect(attempt, controller.signal, () => lastHTTP);
                 clearTimeout(timeout);
                 controller.signal.throwIfAborted();
                 source.Published?.();
+                this.Log({ event: 'attempt-success', siteId: item.siteId, elapsedMs: Date.now() - started, httpStatus: lastHTTP, result: (await this.Repository.Snapshot()).sites.find(site => site.siteId === item.siteId) });
             } catch(error) {
                 if (this.stop.signal.aborted) { await this.Repository.State(job.id, this.requested ?? 'paused'); await this.Refresh(); return; }
-                const failure = Failure(error);
+                const failure = lastHTTP !== null && [401, 403, 429].includes(lastHTTP) ? { code: 'catalog-access-or-capability-unavailable', review: true, retry: false } : Failure(error);
+                const name = String((error as Error)?.name ?? 'Error');
+                const http = /(?:HTTP|status|response)\D{0,12}([1-5][0-9]{2})/i.exec(String((error as Error)?.message ?? ''))?.[1];
+                this.Log({ event: 'attempt-failure', siteId: item.siteId, elapsedMs: Date.now() - started, stage: this.phase, code: failure.code,
+                    errorType: /^[A-Za-z0-9_<>:.-]{1,160}$/.test(name) ? name : 'Error', httpStatus: lastHTTP ?? (http ? Number(http) : /Forbidden/.test(name) ? 403 : null),
+                    diagnostic: failure.code === 'catalog-timeout' ? 'Connector made no timely progress or exceeded the bounded maximum duration' : failure.code });
                 await this.Repository.Result(attempt, failure.code, failure.review, failure.retry);
                 if (!this.settled) {
                     // Wait conservatively without blocking UI controls. Continue the requested batch only
@@ -137,7 +167,7 @@ export class SiteIndexManager {
                     this.Activity.Value = { ...this.Activity.Value, draining: false };
                 }
             } finally {
-                clearTimeout(timeout); this.stop.signal.removeEventListener('abort', abort);
+                clearTimeout(timeout); clearTimeout(maximum); unsubscribe?.(); this.stop.signal.removeEventListener('abort', abort);
                 if (this.settled) { try { await this.iterator?.return?.(); } catch { /* Original error is recorded separately. */ } this.iterator = undefined; }
             }
             await this.Refresh();
@@ -146,19 +176,25 @@ export class SiteIndexManager {
         }
         await this.Repository.State(this.id!, this.requested ?? 'paused'); await this.Refresh();
     }
-    private async Collect(attempt: IndexAttempt, signal: AbortSignal): Promise<void> {
+    private async Collect(attempt: IndexAttempt, signal: AbortSignal, httpStatus: () => number | null = () => null): Promise<void> {
         let offset = 0, terminal = false, partial = false, rejected = 0, coverage: CatalogCoverage = { ...UnknownCoverage };
         const seen = new Map<string, string>();
         while (!terminal) {
             signal.throwIfAborted();
             this.settled = false;
             const iterator = this.iterator!;
+            this.phase = 'connector-fetch';
             const next = Promise.resolve().then(() => { signal.throwIfAborted(); return iterator.next(); });
             this.pending = next.then(() => { this.settled = true; }, () => { this.settled = true; });
             const result = await AwaitSignal(next, signal) as IteratorResult<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage }>;
             if (result.done) break;
             const value = result.value;
             if (!value || !Array.isArray(value.items) || !value.coverage || !['complete', 'partial', 'unknown', 'unsupported'].includes(value.coverage.state)) throw new IndexReviewError('Invalid catalog evidence');
+            const status = httpStatus();
+            // A terminal missing pagination page can retain earlier observations, never prove completeness.
+            if (status !== null && status >= 400 && !(status === 404 && value.items.length > 0)) throw new Error(`HTTP ${status} catalog response`);
+            partial ||= status === 404;
+            this.phase = 'validation';
             const unique: CatalogEntry[] = [];
             for (let index = 0; index < value.items.length; index++) {
                 signal.throwIfAborted();
@@ -168,6 +204,7 @@ export class SiteIndexManager {
                 if (seen.has(entry.id) && seen.get(entry.id) !== entry.title) { rejected++; continue; }
                 if (!seen.has(entry.id)) { seen.set(entry.id, entry.title); unique.push({ id: entry.id, title: entry.title }); }
             }
+            this.phase = 'staging';
             if (!unique.length) await this.Repository.Stage(attempt, offset, []);
             for (let start = 0; start < unique.length; start += 500) { signal.throwIfAborted(); const batch = unique.slice(start, start + 500); await this.Repository.Stage(attempt, offset, batch); offset += batch.length; }
             if (Date.now() - this.lastNotification >= 150) { await this.Refresh(); this.lastNotification = Date.now(); }
@@ -178,9 +215,11 @@ export class SiteIndexManager {
         }
         signal.throwIfAborted();
         if (coverage.state === 'complete' && !terminal) coverage = { ...UnknownCoverage, evidence: 'Enumeration ended without terminal completeness evidence' };
+        this.phase = 'candidate-read';
         const entries = await this.Repository.Candidate(attempt);
         signal.throwIfAborted();
         if (partial || rejected) coverage = { state: 'partial', evidence: rejected ? `${rejected} invalid or ambiguous entries skipped; valid observations retained; source completeness unproven` : 'Partial source observations; source completeness unproven' };
+        this.phase = 'publication';
         await this.Repository.Publish(attempt, entries, coverage);
     }
 }

@@ -42,6 +42,10 @@ export interface ArchiveAttemptResult {
 }
 
 export type ArchiveCommand = ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
+    | { operation: 'catalog-log'; runId: string; event: Record<string, unknown> }
+    | { operation: 'catalog-open-logs' }
+    | { operation: 'queue-details-inspect'; seq: number }
+    | { operation: 'queue-details-save'; seq: number; text?: string; cover?: Uint8Array; extension?: string; partial: boolean }
     | { operation: 'storage-check'; sessionId: string }
     | { operation: 'storage-image'; attemptId: string; bytes: number; quota: { usage: number; quota: number } }
     | { operation: 'storage-image-preflight'; attemptId: string; quota: { usage: number; quota: number } }

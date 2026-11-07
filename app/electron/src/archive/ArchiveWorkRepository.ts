@@ -138,6 +138,7 @@ export class ArchiveWorkRepository {
         const manifest = this.Manifest(sessionId, mangaId, token);
         if (manifest.received_count !== manifest.expected_count) throw new Error('Chapter registration is incomplete');
         const evidence = JSON.parse(String(manifest.evidence)) as ArchiveEvidence;
+        const personalSequence = String(manifest.order_evidence).startsWith('Personal execution sequence ') && !!this.database.prepare('SELECT 1 FROM hub_queue WHERE session_id=?').get(sessionId);
         // Stream durable staging rows; do not materialize another complete manifest in main-process memory.
         for (const row of this.database.prepare('SELECT payload,conflict FROM archive_manifest_entries WHERE session_id=? AND manga_id=? ORDER BY position,id').iterate(sessionId, mangaId)) {
             const chapter = JSON.parse(String(row.payload)) as ArchiveWorkChapter;
@@ -148,7 +149,7 @@ export class ArchiveWorkRepository {
             const state = reason === 'language-policy-exclusion' ? 'excluded' : reason ? 'review' : 'pending';
             this.database.prepare('INSERT OR IGNORE INTO chapters(key,site_id,manga_id,chapter_id) VALUES(?,?,?,?)').run(key, siteId, mangaId, chapter.id);
             this.database.prepare(`INSERT OR IGNORE INTO session_chapters(session_id,chapter_key,title,position,order_confidence,order_evidence,expected_pages,expected_trusted,pages_evidence)
-                VALUES(?,?,?,?,?,?,?,?,?)`).run(sessionId, key, chapter.title, chapter.position, manifest.ordering === 'unknown' ? 'unknown' : 'connector-contract', manifest.order_evidence, chapter.expectedPages ?? null, chapter.expectedPagesTrusted ? 1 : 0, chapter.expectedPagesEvidence ?? '');
+                VALUES(?,?,?,?,?,?,?,?,?)`).run(sessionId, key, chapter.title, chapter.position, manifest.ordering === 'unknown' ? 'unknown' : personalSequence ? 'user-confirmed' : 'connector-contract', manifest.order_evidence, chapter.expectedPages ?? null, chapter.expectedPagesTrusted ? 1 : 0, chapter.expectedPagesEvidence ?? '');
             this.database.prepare(`INSERT OR IGNORE INTO archive_work(session_id,manga_id,id,chapter_key,title,position,language,expected_pages,expected_trusted,pages_evidence,state,reason)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(sessionId, mangaId, chapter.id, key, chapter.title, chapter.position, chapter.language, chapter.expectedPages ?? null, chapter.expectedPagesTrusted ? 1 : 0, chapter.expectedPagesEvidence ?? '', state, reason);
             if (row.conflict) this.database.prepare("UPDATE archive_work SET state='review',reason=? WHERE session_id=? AND manga_id=? AND id=?").run(reason, sessionId, mangaId, chapter.id);

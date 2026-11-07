@@ -325,9 +325,11 @@ export default class extends DecoratableMangaScraper {
         type This = typeof this;
         return Array.fromAsync(async function* (this: This) {
             for (let page = 1, run = true; run; page++) {
+                provider.CatalogSignal?.throwIfAborted();
                 await Delay(500);
                 const { series } = await this.FetchAPI<APIMangas>(`./series/?page=${page}`);
                 const mangas = !series ? [] : series.map(({ id, title }) => new Manga(this, provider, id, title));
+                provider.ReportCatalogProgress(mangas.length);
                 mangas.length > 0 ? yield* mangas : run = false;
             }
         }.call(this));

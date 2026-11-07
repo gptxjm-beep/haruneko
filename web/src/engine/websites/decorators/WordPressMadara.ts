@@ -175,9 +175,11 @@ export async function FetchMangasMultiPageAJAX(this: MangaScraper, provider: Man
         'vars[posts_per_page]': '250'
     });
     for (let page = 0, run = true; run; page++) {
+        provider.CatalogSignal?.throwIfAborted();
         form.set('page', `${page}`);
         const uri = new URL(path + '/wp-admin/admin-ajax.php', this.URI);
         const request = new Request(uri.href, {
+            signal: provider.CatalogSignal,
             method: 'POST',
             body: form.toString(),
             headers: {
@@ -185,11 +187,13 @@ export async function FetchMangasMultiPageAJAX(this: MangaScraper, provider: Man
                 'Referer': this.URI.href
             }
         });
+        provider.TraceCatalog(request);
         const data = await FetchCSS<HTMLAnchorElement>(request, query);
         const mangas = data.map(element => {
             const { id, title } = MangaInfoExtractor(element);
             return new Manga(this, provider, id, title.trim());
         });
+        provider.ReportCatalogProgress(mangas.length);
         mangas.length > 0 ? mangaList.push(...mangas) : run = false;
         await Delay(throttle);
     }

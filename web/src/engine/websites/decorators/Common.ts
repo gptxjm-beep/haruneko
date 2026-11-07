@@ -257,10 +257,12 @@ export function MangasNotSupported() {
 export async function FetchMangasSinglePageCSS<E extends HTMLElement>(this: MangaScraper, provider: MangaPlugin, resource: string, query: string, extract: InfoExtractor<E> = DefaultElementInfoExtractor) {
     const uri = new URL(resource, this.URI);
     const request = new Request(uri, {
+        signal: provider.CatalogSignal,
         headers: {
             Referer: this.URI.href
         }
     });
+    provider.TraceCatalog(request);
     const data = await FetchCSS<E>(request, query);
     return data.map(element => {
         const { id, title } = extract.call(this, element, uri);
@@ -303,6 +305,7 @@ export async function FetchMangasMultiPageCSS<E extends HTMLElement>(this: Manga
         await reducer;
         reducer = throttle > 0 ? Delay(throttle) : Promise.resolve();
         const mangas = await FetchMangasSinglePageCSS.call(this, provider, uri.href, query, extract);
+        provider.ReportCatalogProgress(mangas.length);
         if (generate.isExhaustive || mangaList.isLastItemDifferentFromNonEmpty(mangas)) {
             mangaList.push(...mangas); // TODO: Broadcast event that mangalist for provider has been updated?
         } else {

@@ -8,6 +8,7 @@ export interface ArchiveCatalogPage {
     coverage: ArchiveEvidence;
 }
 export interface ArchiveChapterManifest {
+    sequenceOnly?: boolean;
     chapters: readonly ArchiveWorkChapter[];
     order: 'ascending' | 'descending' | 'unknown';
     orderEvidence: string;
@@ -15,6 +16,7 @@ export interface ArchiveChapterManifest {
 }
 /** Optional streaming capability supplied by connector integrations; absence never proves completeness. */
 export interface ArchiveSource {
+    readonly executionOrderConfidence?: 'user-confirmed';
     readonly site: MangaPlugin;
     Catalog(signal: AbortSignal): AsyncIterable<ArchiveCatalogPage>;
     Chapters(manga: Manga, signal: AbortSignal): Promise<ArchiveChapterManifest>;
@@ -38,7 +40,7 @@ export class EngineArchiveSource implements ArchiveSource {
 
     public async *Catalog(signal: AbortSignal): AsyncIterable<ArchiveCatalogPage> {
         signal.throwIfAborted();
-        const entries = await this.site.FetchArchiveEntries();
+        const entries = await this.site.FetchArchiveEntries(signal);
         signal.throwIfAborted();
         if (!entries.length) yield { items: [], terminal: true, coverage: { state: 'unknown', evidence: 'Empty connector index requires review' } };
         for (let offset = 0; offset < entries.length; offset += 50) {

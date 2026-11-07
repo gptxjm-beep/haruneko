@@ -31,6 +31,11 @@ async function Job(tx: IDBTransaction, id?: string): Promise<IndexJob> {
 export async function SaveManualMediaList(siteId: string, entries: unknown): Promise<void> {
     await Transaction([Store.MediaLists, meta], async tx => {
         const previous = await Site(tx, siteId);
+        if (Array.isArray(entries)) {
+            const old = await RequestValue<CatalogEntry[]>(tx.objectStore(Store.MediaLists).get(siteId));
+            const aliases = new Map((Array.isArray(old) ? old : []).filter(entry => entry?.aliases?.length).map(entry => [entry.id, entry.aliases]));
+            entries = entries.map(entry => entry?.id && aliases.has(entry.id) ? { ...entry, aliases: aliases.get(entry.id) } : entry);
+        }
         tx.objectStore(Store.MediaLists).put(entries, siteId);
         tx.objectStore(meta).put({ ...previous, revision: previous.revision + 1, count: Array.isArray(entries) ? entries.length : 0,
             state: 'review', lastSuccess: Array.isArray(entries) ? Date.now() : previous.lastSuccess, lastAttempt: Date.now(), error: null, coverage: { state: 'unknown', evidence: 'Explicit legacy manual refresh; completeness unproven' } });
@@ -39,6 +44,20 @@ export async function SaveManualMediaList(siteId: string, entries: unknown): Pro
 }
 
 /** One accepted list in MediaLists. Candidate batches never become visible before the atomic publication. */
+export async function SaveCatalogAliases(siteId: string, mangaId: string, aliases: string[]): Promise<void> {
+    const safe = [...new Set(aliases.filter(alias => typeof alias === 'string' && alias.trim()).map(alias => alias.slice(0, 1024)))].slice(0, 30);
+    if (!safe.length) return;
+    await Transaction([Store.MediaLists, meta], async tx => {
+        const entries = await RequestValue<CatalogEntry[]>(tx.objectStore(Store.MediaLists).get(siteId));
+        const row = entries?.find(entry => entry.id === mangaId); if (!row) return;
+        const next = [...new Set([...row.aliases ?? [], ...safe])].slice(0, 30);
+        if (JSON.stringify(row.aliases) === JSON.stringify(next)) return;
+        row.aliases = next;
+        const site = await Site(tx, siteId);
+        tx.objectStore(Store.MediaLists).put(entries, siteId); tx.objectStore(meta).put({ ...site, revision: site.revision + 1 });
+    });
+    NotifyCatalogChange(siteId);
+}
 export class SiteIndexRepository {
     public async Snapshot(): Promise<IndexSnapshot> {
         return Transaction([jobs, meta], async tx => ({ job: await RequestValue(tx.objectStore(jobs).get('arabic-sites')) ?? null,
@@ -122,7 +141,7 @@ export class SiteIndexRepository {
             const merged = MergeCatalogObservation(old ?? [], entries, coverage);
             job.items.find(item => item.siteId === site.siteId)!.state = 'succeeded'; job.current = null; job.updatedAt = Date.now();
             tx.objectStore(Store.MediaLists).put(merged.entries, site.siteId);
-            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: merged.entries.length, lastSuccess: Date.now(), discovered: entries.length, state: 'succeeded', error: null, coverage: merged.coverage });
+            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: merged.entries.length, lastSuccess: Date.now(), discovered: entries.length, state: 'succeeded', error: null, coverage: merged.coverage, comparison: merged.comparison });
             tx.objectStore(jobs).put(job);
             tx.objectStore(staging).delete(IDBKeyRange.bound([attempt.id, 0], [attempt.id, Number.MAX_SAFE_INTEGER]));
         });

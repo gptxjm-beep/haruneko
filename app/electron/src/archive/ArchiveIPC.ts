@@ -1,5 +1,8 @@
 import path from 'node:path';
-import { app, dialog, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
+import { app, dialog, ipcMain, shell, nativeImage, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
+import { mkdir } from 'node:fs/promises';
+import { CatalogLogs } from './CatalogLogs';
+import { MangaDetailsFiles } from './MangaDetailsFiles';
 import { ArchiveRepository } from './ArchiveRepository';
 import { ArchiveFiles } from './ArchiveFiles';
 import { ArchiveChannel, type ArchiveCommand } from './ArchiveProtocol';
@@ -93,6 +96,12 @@ export class ArchiveIPC {
     }
 
     private async Execute(command: ArchiveCommand): Promise<unknown> {
+        if (command.operation === 'catalog-log' || command.operation === 'catalog-open-logs') {
+            const logs = new CatalogLogs(path.join(app.getPath('userData'), 'logs', 'arabic-manga'));
+            if (command.operation === 'catalog-log') return logs.Write(command.runId, command.event).catch(() => {});
+            await mkdir(logs.Directory, { recursive: true });
+            return shell.openPath(logs.Directory);
+        }
         if (this.rendererRecoveryError) throw this.rendererRecoveryError;
         if (!this.repository) {
             await this.bootstrapSafety.Check([{ slot: 'bootstrap', path: app.getPath('userData'), location: 'database', bytes: 0n }]);
@@ -115,6 +124,14 @@ export class ArchiveIPC {
             }
         }
         if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
+        if (command.operation === 'queue-details-save') {
+            if (command.cover) {
+                if (!(command.cover instanceof Uint8Array) || command.cover.length > 8 * 1024 ** 2) throw new Error('Invalid cover payload');
+                if (nativeImage.createFromBuffer(Buffer.from(command.cover)).isEmpty()) { command = { ...command, cover: undefined, partial: true }; }
+            }
+            return new MangaDetailsFiles(this.repository, this.storage).Save(command.seq, command);
+        }
+        if (command.operation === 'queue-details-inspect') return new MangaDetailsFiles(this.repository, this.storage).Inspect(command.seq);
         if (command.operation.startsWith('queue-')) return this.repository.Queue.Execute(command as SelectiveQueueCommand);
         switch (command.operation) {
             case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };

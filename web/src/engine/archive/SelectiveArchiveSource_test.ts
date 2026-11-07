@@ -10,6 +10,21 @@ function Source(order: 'ascending' | 'descending' | 'unknown'): ArchiveSource {
         chapters: ['special', '1.5', '0'].map((id, position) => ({ id, title: id, position, language: 'ar' })), order, orderEvidence: 'Fixture source contract', coverage: { state: 'unknown', evidence: 'Fixture' } }) };
 }
 describe('Selective chapter manifest adapter', () => {
+    it('Should preserve a scattered selection across source, first-to-last and last-to-first execution', async () => {
+        for (const order of ['source', 'first-last', 'last-first'] as const) {
+            const manifest = await new SelectiveArchiveSource(site, ref, { mode: 'selected', ids: ['special', '0'], order }, Source('ascending')).Chapters(manga, new AbortController().signal);
+            expect(manifest.chapters.map(chapter => chapter.id)).toEqual(order === 'last-first' ? ['0', 'special'] : ['special', '0']);
+            expect(manifest.sequenceOnly).toBe(true);
+        }
+    });
+    it('Should reject a numeric range when a new source-order policy has no chronology evidence or manual confirmation', async () => {
+        await expect(new SelectiveArchiveSource(site, ref, { mode: 'range', from: 1, to: 2, order: 'source' }, Source('unknown')).Chapters(manga, new AbortController().signal)).rejects.toThrow('numeric range');
+    });
+    it('Should execute stable selected identities in explicitly chosen source order without a chronology claim', async () => {
+        const manifest = await new SelectiveArchiveSource(site, ref, { mode: 'selected', ids: ['special', '0'], order: 'source' }, Source('unknown')).Chapters(manga, new AbortController().signal);
+        expect(manifest.chapters.map(chapter => chapter.id)).toEqual(['special', '0']);
+        expect(manifest.order).toBe('ascending'); expect(manifest.orderEvidence).toContain('chronology unproven');
+    });
     it('Should document All and legacy Missing as equivalent saved-list scopes, without a new-chapter discovery promise', async () => {
         const all = await new SelectiveArchiveSource(site, ref, { mode: 'all' }, Source('ascending')).Chapters(manga, new AbortController().signal);
         const missing = await new SelectiveArchiveSource(site, ref, { mode: 'missing' }, Source('ascending')).Chapters(manga, new AbortController().signal);

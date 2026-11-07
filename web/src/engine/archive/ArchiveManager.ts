@@ -176,7 +176,7 @@ export class ArchiveManager {
             }
             const manifestId = await this.Command<string>({ operation: 'archive-manifest-begin', sessionId: this.SessionId, mangaId: manga.Identifier, count: manifest.chapters.length,
                 order: manifest.order === 'unknown' ? 'unknown' : 'ascending',
-                orderEvidence: `Original ${manifest.order}; normalized oldest-first once. ${manifest.orderEvidence}`, evidence: manifest.coverage });
+                orderEvidence: manifest.sequenceOnly ? manifest.orderEvidence : `Original ${manifest.order}; normalized oldest-first once. ${manifest.orderEvidence}`, evidence: manifest.coverage });
             for (let offset = 0; offset < manifest.chapters.length; offset += Limits.chapterBatchSize) {
                 if (this.cancellation.signal.aborted) return false;
                 const chapters: (typeof manifest.chapters)[number][] = [];
@@ -219,7 +219,7 @@ export class ArchiveManager {
         try {
             const submitted = await (this.dependencies.enqueue ?? EnqueueArchiveChapter)(this.downloads, this.client, this.SessionId, manga.CreateEntry(item.id, item.title), {
                 siteId: this.site.Identifier, mangaId: manga.Identifier, chapterId: item.id, title: item.title, position: item.position,
-                orderConfidence: 'connector-contract', orderEvidence: 'Saved oldest-first connector manifest; no title-number inference',
+                orderConfidence: this.source.executionOrderConfidence ?? 'connector-contract', orderEvidence: this.source.executionOrderConfidence ? 'User-selected execution sequence; chronology may be unproven' : 'Saved oldest-first connector manifest; no title-number inference',
                 expectedPages: item.expected_pages ?? undefined, expectedPagesTrusted: !!item.expected_trusted, expectedPagesEvidence: item.pages_evidence,
             }, { signal: this.cancellation.signal, pageDelayMs: this.policy.delayMs,
                 beforeTemporaryWrite: bytes => this.dependencies.beforeCapacity?.({ phase: 'before-temporary-write', sessionId: this.SessionId, signal: this.cancellation.signal, bytes }) ?? Promise.resolve() });

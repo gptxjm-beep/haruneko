@@ -20,7 +20,7 @@ export function ValidSearchPreference(value: Partial<SearchPreference>): SearchP
 /** Search-only normalization. Original titles and source identities are never rewritten. */
 export function NormalizeTitle(value: string): string {
     return value.normalize('NFKC').toLocaleLowerCase('en').replace(/\p{M}/gu, '').replace(/\u0640/g, '')
-        .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+        .replace(/[أإآٱ]/g, 'ا').replace(/[ىی]/g, 'ي').replace(/ک/g, 'ك').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
         .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
 }
 function Distance(a: string, b: string, limit: number): number {
@@ -47,7 +47,7 @@ export function MatchScore(title: string, query: string, fuzzy: boolean): number
         const sample = words.slice(i, i + size).join(' ');
         if (sample) best = Math.min(best, Distance(sample, query, limit));
     }
-    return best <= limit ? 600 - best * 50 : 0;
+    return best <= limit && best / query.length <= 0.25 ? 600 - best * 50 : 0;
 }
 export const CompareSearchRows = (a: SearchRow, b: SearchRow) => b.score - a.score || a.title.localeCompare(b.title) || a.mangaId.localeCompare(b.mangaId);
 export function StaleIndex(metadata: IndexSite, now = Date.now()): boolean {

@@ -1,4 +1,5 @@
 import { RecordDiagnosticResponse } from '../ImageDiagnostics';
+import { RecordCatalogHTTP } from '../catalog/CatalogNetwork';
 import protobuf from 'protobufjs';
 import { Exception, InternalError } from '../Error';
 import { EngineResourceKey as R } from '../../i18n/ILocale';
@@ -59,6 +60,7 @@ export abstract class FetchProvider {
         // Fetch API defaults => https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch
         const response = await fetch(request);
         RecordDiagnosticResponse(request, response);
+        RecordCatalogHTTP(request, response);
         await this.ValidateResponse(response);
         return response;
     }

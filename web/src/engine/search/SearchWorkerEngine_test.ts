@@ -16,6 +16,15 @@ function fixture() {
     return { engine, lists, versions, rebuilt, search, makeStale() { stale = true; } };
 }
 describe('Revision-aware worker search over accepted catalogs', () => {
+    it('Should rank an exact title in a later source above fuzzy matches and search explicit aliases without merging identities', async () => {
+        const f = fixture();
+        f.lists.set('a', Array.from({ length: 30 }, (_, n) => ({ id: String(n), title: 'One Pieca' })));
+        f.lists.set('b', [{ id: 'exact', title: 'One Piece' }, { id: 'alias', title: 'ワンピース', aliases: ['ون بيس', 'One Piece'] }]);
+        const result = await f.engine.Search({ query: 'one piece', page: 1, siteId: '', fuzzy: true }, [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }]);
+        expect(result.groups[0].rows.map(row => row.mangaId)).toEqual(['exact', 'alias']);
+        expect((await f.search('ون بيس')).groups.flatMap(group => group.rows).map(row => row.mangaId)).toEqual(['alias']);
+        expect((await f.search('ون بيس')).groups.flatMap(group => group.rows)[0].title).toBe('ワンピース');
+    });
     it('Should group the same title in multiple sites without merging source identities', async () => {
         const f = fixture(), result = await f.search('one piece');
         expect(result.total).toBe(2);

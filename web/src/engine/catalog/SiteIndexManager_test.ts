@@ -56,6 +56,33 @@ const wait = async (predicate: () => boolean) => { for (let i = 0; i < 2000; i++
 const manager = (ledger: Ledger, sources: CatalogSource[], mutex = lock(), timeoutMs = 2000) => new SiteIndexManager(ledger as unknown as SiteIndexRepository, () => sources, mutex, { timeoutMs, delayMs: 1, retryMs: 1 });
 
 describe('Sequential metadata-only site indexing', () => {
+    it('Should not publish links from a rate-limit response or retry it aggressively', async () => {
+        const ledger = new Ledger(); let observe: (count: number, status?: number) => void;
+        const native: CatalogSource = { id: 'blocked', ObserveProgress(listener) { observe = listener; return () => {}; }, Catalog: async function* () {
+            observe(0, 429); yield { items: [{ id: 'error-page-link', title: 'Must not publish' }], terminal: true, coverage: unknown };
+        } };
+        const run = manager(ledger, [native]); await run.Start(); await wait(() => !run.Activity.Value.owned);
+        expect(ledger.published).not.toHaveBeenCalled(); expect(ledger.job?.items[0]).toMatchObject({ state: 'review', attempts: 1 });
+    });
+    it('Should publish and finish even when diagnostic logging is unavailable', async () => {
+        const ledger = new Ledger();
+        const run = new SiteIndexManager(ledger as unknown as SiteIndexRepository, () => [source('a')], lock(), { timeoutMs: 1000, delayMs: 1, retryMs: 1 }, async () => { throw new Error('Log disk unavailable'); });
+        await run.Start(); await wait(() => !run.Activity.Value.owned);
+        expect(ledger.published).toHaveBeenCalledOnce(); expect(ledger.job?.state).toBe('finished');
+    });
+    it('Should extend an idle deadline only for real connector progress', async () => {
+        vi.useFakeTimers();
+        try {
+            const ledger = new Ledger(); let progress: (count: number) => void;
+            const native: CatalogSource = { id: 'large', ObserveProgress(listener) { progress = listener; return () => {}; }, Catalog: async function* () {
+                for (let i = 0; i < 6; i++) { await new Promise(resolve => setTimeout(resolve, 10)); progress(100); }
+                yield { items: [{ id: 'm', title: 'M' }], terminal: true, coverage: unknown };
+            } };
+            const run = manager(ledger, [native], lock(), 30);
+            await run.Start(); await vi.advanceTimersByTimeAsync(200);
+            expect(ledger.published).toHaveBeenCalledOnce();
+        } finally { vi.useRealTimers(); }
+    });
     it('Should update only one explicitly selected original source without fetching other sites', async () => {
         const ledger = new Ledger(), a = source('a'), b = source('b');
         a.Catalog = vi.fn(a.Catalog); b.Catalog = vi.fn(b.Catalog);
