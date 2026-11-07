@@ -1,4 +1,5 @@
 import { NotifyCatalogChange } from './CatalogNotifications';
+import { MergeCatalogObservation } from './CatalogPublication';
 import { Store } from '../StorageController';
 import { OpenMediaDatabase } from './MediaDatabase';
 import { EmptyIndexSite, IndexConflictError, IndexReviewError, IndexStorageError, type CatalogEntry, type CatalogCoverage, type IndexSite, type IndexJob, type IndexSnapshot, type IndexAttempt } from './SiteIndexContract';
@@ -117,13 +118,11 @@ export class SiteIndexRepository {
             const job = await Job(tx, attempt.jobId), site = await Site(tx, attempt.siteId);
             if (job.state !== 'running' || job.current !== attempt.siteId || site.revision !== attempt.revision) throw new IndexConflictError('Manual refresh or job state changed; candidate not published');
             const old = await RequestValue<CatalogEntry[]>(tx.objectStore(Store.MediaLists).get(site.siteId));
-            const ids = new Set(entries.map(entry => entry.id));
-            if (entries.length !== site.discovered || coverage.state === 'complete' && !coverage.evidence.trim()
-                || coverage.state !== 'complete' && old?.some(entry => !ids.has(entry.id))) throw new IndexReviewError('Missing identities or incomplete candidate; previous index retained');
-            if (coverage.state === 'partial' || coverage.state === 'unsupported' || !entries.length && coverage.state !== 'complete' || entries.length < site.count && coverage.state !== 'complete') throw new IndexReviewError('Uncertain empty, partial or shrinking catalog; previous index retained');
+            if (entries.length !== site.discovered) throw new IndexReviewError('Incomplete staging transaction; previous index retained');
+            const merged = MergeCatalogObservation(old ?? [], entries, coverage);
             job.items.find(item => item.siteId === site.siteId)!.state = 'succeeded'; job.current = null; job.updatedAt = Date.now();
-            tx.objectStore(Store.MediaLists).put(entries, site.siteId);
-            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: entries.length, lastSuccess: Date.now(), discovered: entries.length, state: 'succeeded', error: null, coverage });
+            tx.objectStore(Store.MediaLists).put(merged.entries, site.siteId);
+            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: merged.entries.length, lastSuccess: Date.now(), discovered: entries.length, state: 'succeeded', error: null, coverage: merged.coverage });
             tx.objectStore(jobs).put(job);
             tx.objectStore(staging).delete(IDBKeyRange.bound([attempt.id, 0], [attempt.id, Number.MAX_SAFE_INTEGER]));
         });

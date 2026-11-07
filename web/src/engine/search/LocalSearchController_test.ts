@@ -36,6 +36,6 @@ describe('Shared local search view state', () => {
         const client = { Cancel() {}, Close() {}, Search: async () => { throw new Error('blocked'); } } as unknown as SearchWorkerClient;
         const controller = new LocalSearchController({ LoadPersistent: async () => undefined, SavePersistent: async () => {} } as unknown as StorageController, client, () => []);
         await controller.Initialize(); controller.Query({ query: 'test' }, 0); await tick();
-        expect(controller.State.Value.status).toBe('error'); expect(controller.State.Value.result).toBeNull(); expect(controller.State.Value.error).toContain('محجوب'); controller.Close();
+        expect(controller.State.Value.status).toBe('error'); expect(controller.State.Value.result).toBeNull(); expect(controller.State.Value.error).toContain('blocked'); controller.Close();
     });
 });

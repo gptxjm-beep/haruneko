@@ -24,7 +24,7 @@ export class SelectiveQueueController {
         const queued = { ...this.State.Value.queued };
         if (reference) queued[QueueIdentity(reference)] = true;
         else for (const [id, selected] of Object.entries(this.State.Value.flags)) if (selected) queued[id] = true;
-        this.State.Value = { ...this.State.Value, queued, message: `أضيف ${result.added}؛ موجود سابقًا ${result.existing}. لم يبدأ تنزيل.` };
+        this.State.Value = { ...this.State.Value, queued, message: `Added ${result.added}; already present ${result.existing}. Downloads have not started.` };
     }
     public async Selections(after?: number): Promise<SelectedManga[]> { return this.Client.Request({ operation: 'queue-selections', after }); }
     public async List(offset?: number): Promise<QueueManga[]> { return this.Client.Request({ operation: 'queue-list', offset }); }

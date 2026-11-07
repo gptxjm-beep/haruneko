@@ -5,7 +5,7 @@ import { Settings } from './Settings.svelte';
 
 class UIClassicStore {
     page: 'media' | 'arabic-manga' = $state('media');
-    hubSection: 'sites' | 'search' | 'selections' | 'queue' = $state('sites');
+    hubSection: 'sites' | 'search' | 'selections' | 'queue' = $state('search');
     WindowController:IAppWindow = $state();
     selectedPlugin: MediaContainer<MediaChild> = $state(HakuNeko.BookmarkPlugin);
     selectedMedia: MediaContainer<MediaChild> = $state(null);

@@ -1,4 +1,5 @@
 (async () => {
+    await import('/src/engine/ArrayExtensions.ts'); // Registered by the real engine bootstrap; required by native pagination.
     const { Respond, Requests } = await import('/@id/__x00__arabic-priority-transport');
     const { default: MangaTek } = await import('/src/engine/websites/MangaTek.ts');
     const { default: MangaLover } = await import('/src/engine/websites/MangaLover.ts');
@@ -103,5 +104,36 @@
     const failed = await EnqueueArchiveChapter(manager, client, failedId, lover.chapter, { ...registration, siteId: lover.site.Identifier, mangaId: lover.manga.Identifier, chapterId: lover.chapter.Identifier, expectedPages: 2 });
     const failure = await failed.handle.completion;
     record('A chapter with an HTML page cannot finish as a successful export', failure.outcome === 'failed' && failure.inputValidation.validatedPages < 2);
+    // The real native 3asq scraper returns the same paginated list to manual and hub indexing.
+    const { SiteIndexRepository } = await import('/src/engine/catalog/SiteIndexRepository.ts');
+    const { SiteIndexManager } = await import('/src/engine/catalog/SiteIndexManager.ts');
+    const { StorageControllerBrowser } = await import('/src/engine/StorageControllerBrowser.ts');
+    const { SettingsManager } = await import('/src/engine/SettingsManager.ts');
+    const { Store } = await import('/src/engine/StorageController.ts');
+    const browserStore = new StorageControllerBrowser(), catalogRepository = new SiteIndexRepository();
+    const catalogSite = new MangaLover().CreatePlugin(browserStore, new SettingsManager(browserStore));
+    catalogSite.Initialize = async () => {}; // Transport authorization/setup is isolated; the real scraper/pagination stays intact.
+    const respondCatalog = blank => {
+        for (let page = 1; page <= 5; page++) Respond(`https://3asq.online/manga/page/${page}/`, { body: Array.from({ length: Math.max(0, Math.min(100, 399 - (page - 1) * 100)) }, (_, i) => {
+            const n = (page - 1) * 100 + i;
+            return `<div class="page-item-detail"><div data-post-id="${n}"></div><div class="post-title"><h3><a href="https://3asq.online/manga/catalog-${n}/">${blank && n === 100 ? '' : `Catalog ${n}`}</a></h3></div></div>`;
+        }).join('') });
+    };
+    const update = async () => {
+        const indexer = new SiteIndexManager(catalogRepository, () => [{ id: catalogSite.Identifier, Catalog: signal => new EngineArchiveSource(catalogSite).Catalog(signal), Published: () => catalogSite.InvalidateMediaListCache() }], navigator.locks, { timeoutMs: 15000, delayMs: 1, retryMs: 1 });
+        await indexer.Start(catalogSite.Identifier); const until = Date.now() + 15000;
+        while (indexer.Activity.Value.owned) { if (Date.now() > until) throw new Error('Native catalog indexing did not settle'); await new Promise(resolve => setTimeout(resolve, 10)); }
+        const status = (await catalogRepository.Snapshot()).sites.find(site => site.siteId === catalogSite.Identifier);
+        if (status?.state !== 'succeeded') throw new Error(`Native fixture catalog failed: ${JSON.stringify(status)}; activity: ${indexer.Activity.Value.error}`);
+    };
+    respondCatalog(true); await update();
+    let catalog = await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier);
+    record('Real 3asq pagination retains 398 searchable references past a blank title at position 101 instead of discarding the first 100', catalog.length === 398 && catalog.some(row => JSON.parse(row.id).post === '398'));
+    respondCatalog(false); await catalogSite.Update();
+    record('The original manual refresh saves all 399 real scraper references', (await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier)).length === 399);
+    respondCatalog(true); await update();
+    catalog = await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier);
+    const catalogState = (await catalogRepository.Snapshot()).sites.find(site => site.siteId === catalogSite.Identifier);
+    record('A later incomplete bulk refresh preserves the larger manual catalog and explicitly marks partial source coverage', catalog.length === 399 && catalogState.coverage.state === 'partial' && catalogState.state === 'succeeded');
     return checks;
 })()

@@ -56,6 +56,24 @@ const wait = async (predicate: () => boolean) => { for (let i = 0; i < 2000; i++
 const manager = (ledger: Ledger, sources: CatalogSource[], mutex = lock(), timeoutMs = 2000) => new SiteIndexManager(ledger as unknown as SiteIndexRepository, () => sources, mutex, { timeoutMs, delayMs: 1, retryMs: 1 });
 
 describe('Sequential metadata-only site indexing', () => {
+    it('Should update only one explicitly selected original source without fetching other sites', async () => {
+        const ledger = new Ledger(), a = source('a'), b = source('b');
+        a.Catalog = vi.fn(a.Catalog); b.Catalog = vi.fn(b.Catalog);
+        const run = manager(ledger, [a, b]); await run.Start('b'); await wait(() => !run.Activity.Value.owned);
+        expect(a.Catalog).not.toHaveBeenCalled(); expect(b.Catalog).toHaveBeenCalledOnce();
+        expect(ledger.job!.items.map(item => item.siteId)).toEqual(['b']);
+    });
+    it('Should publish valid native entries past the first 100 despite one missing title in a 399-entry catalog', async () => {
+        const ledger = new Ledger();
+        const entries = Array.from({ length: 399 }, (_, n) => ({ id: String(n), title: n === 100 ? '' : `Manga ${n}` }));
+        const run = manager(ledger, [{ id: 'a', Catalog: async function* () {
+            for (let offset = 0; offset < entries.length; offset += 50) yield { items: entries.slice(offset, offset + 50), terminal: offset + 50 >= entries.length, coverage: unknown };
+        } }]);
+        await run.Start(); await wait(() => !run.Activity.Value.owned);
+        expect(ledger.published).toHaveBeenCalledOnce();
+        expect(ledger.published.mock.calls[0][1]).toHaveLength(398);
+        expect(ledger.published.mock.calls[0][2].state).toBe('partial');
+    });
     it('Should honor cancellation requested immediately during startup without invoking a connector', async () => {
         const ledger = new Ledger(), native = source('a'); native.Catalog = vi.fn(native.Catalog);
         const run = manager(ledger, [native]);
@@ -112,11 +130,12 @@ describe('Sequential metadata-only site indexing', () => {
         await run.Start(); await wait(() => !run.Activity.Value.owned);
         expect(ledger.published.mock.calls[0][2].state).toBe('unknown');
     });
-    it('Should retain partial observations for review without publishing them', async () => {
+    it('Should publish useful partial observations with explicit uncertain coverage', async () => {
         const ledger = new Ledger(), run = manager(ledger, [{ id: 'a', Catalog: async function* () { yield { items: [{ id: 'm', title: 'M' }], terminal: true, coverage: { state: 'partial', evidence: 'Only one source page' } }; } }, source('b')]);
         await run.Start(); await wait(() => !run.Activity.Value.owned);
-        expect(ledger.job!.items[0].state).toBe('review');
-        expect(ledger.published.mock.calls.map(call => call[0])).toEqual(['b']);
+        expect(ledger.job!.items[0].state).toBe('succeeded');
+        expect(ledger.published.mock.calls.map(call => call[0])).toEqual(['a', 'b']);
+        expect(ledger.published.mock.calls[0][2].state).toBe('partial');
     });
     it('Should hold the shared lock after a timeout until an uncooperative request settles', async () => {
         const ledger = new Ledger(), mutex = lock(); let release: () => void;
@@ -164,9 +183,9 @@ describe('Sequential metadata-only site indexing', () => {
         expect(run.State.Value.job!.state).toBe('interrupted'); expect(ledger.published).not.toHaveBeenCalled();
         await run.Resume(); await wait(() => !run.Activity.Value.owned); expect(ledger.published.mock.calls.map(call => call[0])).toEqual(['b']);
     });
-    it('Should reject conflicting duplicate identities instead of silently dropping one variant', async () => {
+    it('Should flag an ambiguous duplicate without discarding other valid observations', async () => {
         const ledger = new Ledger(), run = manager(ledger, [{ id: 'a', Catalog: async function* () { yield { items: [{ id: 'm', title: 'A' }, { id: 'm', title: 'B' }], terminal: true, coverage: unknown }; } }]);
-        await run.Start(); await wait(() => !run.Activity.Value.owned); expect(ledger.job!.items[0].state).toBe('review'); expect(ledger.published).not.toHaveBeenCalled();
+        await run.Start(); await wait(() => !run.Activity.Value.owned); expect(ledger.job!.items[0].state).toBe('succeeded'); expect(ledger.published.mock.calls[0][2].state).toBe('partial');
     });
     it('Should deduplicate identical entries and yield while processing a large catalog', async () => {
         const ledger = new Ledger(); let heartbeat = false;

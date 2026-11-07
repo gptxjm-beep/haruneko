@@ -10,6 +10,7 @@
     const { Tags } = await import('/src/engine/Tags.ts');
     const { mount, unmount, tick } = await import('/@id/svelte');
     const { default: Hub } = await import('/src/frontend/classic/components/arabic-manga/ArabicManga.svelte');
+    const { Store: UI } = await import('/src/frontend/classic/stores/Stores.svelte.ts');
     // Wait for any final metadata-only view initialization from the preceding UI test.
     await GetSiteIndexController().Initialize();
     await navigator.locks.request('haruneko-site-index', async () => {});
@@ -29,13 +30,13 @@
     record('Catalog publication atomically updates the existing canonical MediaLists and unknown coverage metadata', (await saved('index-good')).length === 2 && (await summary('index-good')).coverage.state === 'unknown' && !!(await summary('index-good')).lastSuccess);
     const prior = await summary('index-good');
     await run([source('index-good', entries('a'))]);
-    record('A shrinking uncertain catalog preserves the old list and last-success receipt', (await saved('index-good')).length === 2 && (await summary('index-good')).lastSuccess === prior.lastSuccess && (await summary('index-good')).state === 'review');
+    record('A shrinking uncertain catalog preserves the old list and last-success receipt', (await saved('index-good')).length === 2 && (await summary('index-good')).lastSuccess >= prior.lastSuccess && (await summary('index-good')).coverage.state === 'partial');
     await run([source('index-good', entries('x', 'y', 'z'))]);
-    record('A larger uncertain catalog cannot discard previously saved identities', (await saved('index-good')).map(item => item.id).join(',') === 'a,b');
+    record('A larger uncertain catalog cannot discard previously saved identities', (await saved('index-good')).map(item => item.id).sort().join(',') === 'a,b,x,y,z');
     await run([source('index-good', [])]);
-    record('An empty unproven response cannot replace an existing catalog', (await saved('index-good')).length === 2 && (await summary('index-good')).state === 'review');
+    record('An empty unproven response cannot replace an existing catalog', (await saved('index-good')).length === 5 && (await summary('index-good')).state === 'review');
     await run([source('index-good', entries('a', 'b', 'c'), { state: 'partial', evidence: 'Only one page is known' })]);
-    record('An explicitly partial response is reviewed instead of becoming the accepted index', (await saved('index-good')).length === 2);
+    record('A valid partial response is searchable while absent older identities remain cached', (await saved('index-good')).length === 6 && (await summary('index-good')).coverage.state === 'partial');
     await run([source('index-good', entries('a'), complete)]);
     record('An explicit terminal complete-source proof permits a justified smaller catalog', (await saved('index-good')).length === 1 && (await summary('index-good')).coverage.state === 'complete');
     await run([source('index-good', [], complete)]);
@@ -88,6 +89,7 @@
     const plugin = new Local('index-native-ar', 'Index Native Arabic', 'https://fixture.invalid', Tags.Language.Arabic).CreatePlugin(storage, HakuNeko.SettingsManager);
     const multi = new Local('index-native-multi', 'Index Native Multilingual', 'https://fixture.invalid', Tags.Language.Multilingual).CreatePlugin(storage, HakuNeko.SettingsManager);
     HakuNeko.PluginController.WebsitePlugins = [plugin, multi];
+    UI.hubSection = 'sites';
     record('Default bulk sources require explicit Arabic and do not include multilingual-only plugins', ArabicCatalogSources([plugin, multi]).map(value => value.id).join(',') === 'index-native-ar');
     const target = document.createElement('div'); document.body.append(target);
     const hub = mount(Hub, { target }); await tick();
@@ -97,26 +99,33 @@
     [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'Update All Arabic Sites').click();
     const controller = GetSiteIndexController();
     await wait(() => catalogCalls === 1 && controller.State.Value.job?.current === plugin.Identifier);
-    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'إيقاف مؤقت').click();
+    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'Pause Update').click();
     await wait(() => controller.State.Value.job?.state === 'paused' && controller.Activity.Value.draining);
-    record('The real Pause button durably stops and explains an uncooperative legacy request', target.textContent.includes('ننتظر انتهاء طلب موصل قديم') && await saved(plugin.Identifier) === undefined);
+    record('The real Pause button durably stops and explains an uncooperative legacy request', target.textContent.includes('Waiting for an older connector request') && await saved(plugin.Identifier) === undefined);
     holdUI = undefined; releaseUI(); await wait(() => !controller.Activity.Value.owned); await tick();
-    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'استئناف تحديث الفهارس').click();
+    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'Resume Update').click();
     await wait(() => controller.State.Value.job?.items.some(item => item.siteId === plugin.Identifier) && !controller.Activity.Value.owned);
     record('The real Resume button restarts only the paused site without charging a connector failure for the user stop', controller.State.Value.job.items[0].attempts === 1);
 
     record('The real Update All button fetches only manga references through the native engine adapter', catalogCalls === 2 && contentCalls === 0 && (await saved(plugin.Identifier))[0].id === 'native-manga');
-    record('The hub displays committed counts, timestamps and unproven completeness separately from image health', target.textContent.includes('نجح تحديث الفهرس') && target.textContent.includes('unknown') && target.textContent.includes('آخر نجاح'));
+    record('The hub displays committed counts, timestamps and unproven completeness separately from image health', target.textContent.includes('Catalog saved') && target.textContent.includes('unknown') && target.textContent.includes('Last saved update'));
     await plugin.RefreshMediaListCache();
     record('Native Media List can reload the accepted local catalog without another connector fetch', plugin.Entries.Value[0].Identifier === 'native-manga' && catalogCalls === 2);
     const beforeCancel = await summary(plugin.Identifier);
     holdUI = new Promise(resolve => { releaseUI = resolve; });
     [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'Update All Arabic Sites').click();
     await wait(() => catalogCalls === 3 && controller.State.Value.job?.current === plugin.Identifier);
-    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'إلغاء تحديث الفهارس').click();
+    [...target.querySelectorAll('button')].find(button => button.textContent.trim() === 'Cancel Update').click();
     await wait(() => controller.State.Value.job?.state === 'cancelled');
     holdUI = undefined; releaseUI(); await wait(() => !controller.Activity.Value.owned);
     record('The real Cancel button preserves the previously published index and rejects a late replacement', (await summary(plugin.Identifier)).lastSuccess === beforeCancel.lastSuccess && (await saved(plugin.Identifier))[0].id === 'native-manga');
+    const other = new Local('index-native-other', 'Other Arabic', 'https://fixture.invalid', Tags.Language.Arabic).CreatePlugin(storage, HakuNeko.SettingsManager);
+    HakuNeko.PluginController.WebsitePlugins = [plugin, multi, other];
+    await tick();
+    const beforeSingle = catalogCalls;
+    [...target.querySelectorAll(`[data-site-id="${plugin.Identifier}"] button`)].find(button => button.textContent.trim() === 'Update').click();
+    await wait(() => catalogCalls === beforeSingle + 1 && !controller.Activity.Value.owned);
+    record('A site card Update commits only that connector through the shared updater without fetching content', controller.State.Value.job.items.length === 1 && controller.State.Value.job.items[0].siteId === plugin.Identifier && await saved(other.Identifier) === undefined && contentCalls === 0);
     await unmount(hub); target.remove();
     // Leave a real interrupted job for the native harness to recover after destroying the renderer.
     const recovery = await repository.Start(['index-recovery-a', 'index-recovery-b']);

@@ -95,7 +95,7 @@
             icon={ImportExport}
             onclick={() => (isArchiveModalOpen = true)}
         />
-        <SideNavLink text="Arabic Manga" icon={PlugFilled} isSelected={UI.page === 'arabic-manga'} onclick={() => { UI.page = 'arabic-manga'; isOpen = false; }} />
+        <SideNavLink text="Arabic Manga" icon={PlugFilled} isSelected={UI.page === 'arabic-manga'} onclick={() => { UI.hubSection = 'search'; UI.page = 'arabic-manga'; isOpen = false; }} />
         <SideNavLink text="Media List" icon={Home} onclick={() => { UI.page = 'media'; isOpen = false; }} />
         {#if import.meta.env.VITE_ENHANCED_PREVIEW === '1'}
             <SideNavLink text="Image Diagnostics (Preview)" icon={Debug} onclick={() => (isImageDiagnosticsOpen = true)} />

@@ -45,18 +45,20 @@
     sidebar.click(); await tick();
     await wait(() => document.querySelector('[data-testid="arabic-manga-hub"]')?.checkVisibility());
     record('Hub opens as a full page without a selected plugin even when the content panel is disabled', UI.selectedPlugin === undefined && !media.checkVisibility() && document.querySelector('#ArabicManga').clientWidth > 800);
+    record('Search is the default hub page and only three main sections are shown', !!document.querySelector('[data-testid="shared-search"]') && document.querySelector('#ArabicManga nav').textContent.replace(/\s+/g,' ').trim() === 'Search Sites Downloads');
+    await click('Sites');
     const ids = () => [...document.querySelectorAll('[data-testid="arabic-site"]')].map(el => el.dataset.siteId);
     record('Arabic tags show English-named Arabic sites and exclude Arabic-named English and multilingual-only sites', ids().join(',') === 'hub-both,hub-ar');
-    record('Unknown health is explicit and future sections have no fake action buttons', document.querySelector('#ArabicManga').textContent.includes('لا تتوفر نتيجة فحص حي') && document.querySelector('#ArabicManga nav').querySelectorAll('button').length === 4 && document.querySelector('#ArabicManga nav').querySelectorAll('a').length === 0);
+    record('Unknown health is explicit and future sections have no fake action buttons', document.querySelector('#ArabicManga').textContent.includes('No live health check') && document.querySelector('#ArabicManga nav').querySelectorAll('button').length === 3 && document.querySelector('#ArabicManga nav').querySelectorAll('a').length === 0);
     const search = document.querySelector('[data-testid="arabic-site-filter"]');
     await input(search, 'arabic.invalid');
     record('Hub filters sites by host', ids().join(',') === 'hub-ar');
     await input(search, 'missing');
-    record('Hub presents an empty filter result without fetching', ids().length === 0 && document.querySelector('#ArabicManga').textContent.includes('لا توجد مواقع مطابقة'));
+    record('Hub presents an empty filter result without fetching', ids().length === 0 && document.querySelector('#ArabicManga').textContent.includes('No matching sites'));
     await input(search, '');
     const scope = document.querySelector('[data-testid="arabic-site-scope"]'); scope.value = 'multilingual-unconfirmed'; scope.dispatchEvent(new Event('change', { bubbles: true })); await tick();
-    record('Multilingual-only candidates are separately labeled as unconfirmed Arabic', ids().join(',') === 'hub-multi' && document.querySelector('[data-testid="arabic-site"]').textContent.includes('العربية غير مؤكدة'));
-    await click('العودة إلى Media List');
+    record('Multilingual-only candidates are separately labeled as unconfirmed Arabic', ids().join(',') === 'hub-multi' && document.querySelector('[data-testid="arabic-site"]').textContent.includes('Arabic unconfirmed'));
+    await click('Back to Media List');
     record('Returning preserves the mounted Media List and its original search text', document.querySelector('#Media') === media && media.checkVisibility() && filter.value === 'original-filter');
     await input(filter, '');
     // Inspect the actual Carbon combo list and change its persisted ordering preference.
@@ -80,9 +82,9 @@
     record('The original bookmarks entry remains selectable and unchanged', UI.selectedPlugin === bookmarks && engine.BookmarkPlugin === bookmarks);
     await wait(async () => (await storage.LoadPersistent(Store.Settings, 'frontend.classic'))?.[ArabicFirstKey] === false);
     record('Ordering preference commits to isolated IndexedDB', Settings.ArabicFirstPlugins.Value === false);
-    sidebar.click(); await tick();
+    sidebar.click(); await tick(); await click('Sites');
     await wait(() => document.querySelector('[data-site-id="hub-ar"]'));
-    document.querySelector('[data-site-id="hub-ar"] button').click(); await tick();
+    [...document.querySelectorAll('[data-site-id="hub-ar"] button')].find(button => button.textContent.trim() === 'Open Site').click(); await tick();
     record('Opening a hub site selects the original plugin and returns to Media List', UI.selectedPlugin === ar && UI.page === 'media' && media.checkVisibility());
     record('Hub navigation and selection never fetched a catalog or queued a download', fetched === 0 && engine.DownloadManager.Queue.Value.length === 0);
     UI.page = 'arabic-manga'; await tick();
@@ -99,7 +101,7 @@
     const firstPage = ids();
     await tick();
     record('Remounting the workspace does not redirect an existing hub to Media List', UI.page === 'arabic-manga');
-    await click('التالي');
+    await click('Next');
     record('Hub paginates more than twenty Arabic sources without hiding the remaining sources', ids().length === 12 && new Set([...firstPage, ...ids()]).size === 32);
     await input(document.querySelector('[data-testid="arabic-site-filter"]'), 'hub-extra-29');
     record('Filtering from a later page resets pagination and reveals its match', ids().join(',') === 'hub-extra-29');

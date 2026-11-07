@@ -56,7 +56,7 @@ export class SiteIndexManager {
         await this.locks.request('haruneko-site-index', { ifAvailable: true }, async lock => { if (lock) await this.Repository.Interrupt(); });
         await this.Refresh();
     }
-    public Start(): Promise<void> { return this.Open(false); }
+    public Start(siteId?: string): Promise<void> { return this.Open(false, siteId); }
     public Resume(): Promise<void> { return this.Open(true); }
     public async Stop(cancel = false): Promise<void> {
         if (this.Activity.Value.owned) {
@@ -73,7 +73,7 @@ export class SiteIndexManager {
             await this.Refresh();
         }
     }
-    private async Open(resume: boolean): Promise<void> {
+    private async Open(resume: boolean, siteId?: string): Promise<void> {
         if (!this.locks || this.Activity.Value.owned) return Promise.reject(new IndexConflictError('Catalog updater is active or unavailable'));
         this.Activity.Value = { owned: true, draining: false, error: '' };
         this.stop = new AbortController(); this.requested = undefined; this.id = undefined;
@@ -83,7 +83,9 @@ export class SiteIndexManager {
             void this.locks.request('haruneko-site-index', { ifAvailable: true }, async lock => {
                 if (!lock) throw new IndexConflictError('Another catalog updater is active');
                 try {
-                    const job = resume ? await this.Repository.Resume() : await this.Repository.Start(this.sources().map(source => source.id));
+                    const ids = this.sources().map(source => source.id).filter(id => !siteId || id === siteId);
+                    if (!resume && !ids.length) throw new IndexConflictError('The selected Arabic manga connector is unavailable');
+                    const job = resume ? await this.Repository.Resume() : await this.Repository.Start(ids);
                     this.id = job.id; await this.Refresh(); ready = true; resolve();
                     await this.Run();
                 } finally {
@@ -145,7 +147,7 @@ export class SiteIndexManager {
         await this.Repository.State(this.id!, this.requested ?? 'paused'); await this.Refresh();
     }
     private async Collect(attempt: IndexAttempt, signal: AbortSignal): Promise<void> {
-        let offset = 0, terminal = false, coverage: CatalogCoverage = { ...UnknownCoverage };
+        let offset = 0, terminal = false, partial = false, rejected = 0, coverage: CatalogCoverage = { ...UnknownCoverage };
         const seen = new Map<string, string>();
         while (!terminal) {
             signal.throwIfAborted();
@@ -160,11 +162,11 @@ export class SiteIndexManager {
             const unique: CatalogEntry[] = [];
             for (let index = 0; index < value.items.length; index++) {
                 signal.throwIfAborted();
-                const entry = value.items[index];
-                if (!entry || typeof entry.id !== 'string' || !entry.id.trim() || entry.id.length > 4096 || typeof entry.title !== 'string' || !entry.title.trim() || entry.title.length > 4096) throw new IndexReviewError('Invalid catalog identity');
-                if (seen.has(entry.id) && seen.get(entry.id) !== entry.title) throw new IndexReviewError('Conflicting duplicate manga identities');
-                if (!seen.has(entry.id)) { seen.set(entry.id, entry.title); unique.push({ id: entry.id, title: entry.title }); }
                 if (index % 500 === 499) await pause(0, signal);
+                const entry = value.items[index];
+                if (!entry || typeof entry.id !== 'string' || !entry.id.trim() || entry.id.length > 4096 || typeof entry.title !== 'string' || !entry.title.trim() || entry.title.length > 4096) { rejected++; continue; }
+                if (seen.has(entry.id) && seen.get(entry.id) !== entry.title) { rejected++; continue; }
+                if (!seen.has(entry.id)) { seen.set(entry.id, entry.title); unique.push({ id: entry.id, title: entry.title }); }
             }
             if (!unique.length) await this.Repository.Stage(attempt, offset, []);
             for (let start = 0; start < unique.length; start += 500) { signal.throwIfAborted(); const batch = unique.slice(start, start + 500); await this.Repository.Stage(attempt, offset, batch); offset += batch.length; }
@@ -172,12 +174,13 @@ export class SiteIndexManager {
             await pause(0, signal);
             terminal = value.terminal === true;
             coverage = { state: value.coverage.state, evidence: typeof value.coverage.evidence === 'string' ? value.coverage.evidence.slice(0, 2048) : '' };
-            if (coverage.state === 'partial' || coverage.state === 'unsupported') throw new IndexReviewError('Source explicitly reports incomplete enumeration');
+            partial ||= coverage.state === 'partial' || coverage.state === 'unsupported';
         }
         signal.throwIfAborted();
         if (coverage.state === 'complete' && !terminal) coverage = { ...UnknownCoverage, evidence: 'Enumeration ended without terminal completeness evidence' };
         const entries = await this.Repository.Candidate(attempt);
         signal.throwIfAborted();
+        if (partial || rejected) coverage = { state: 'partial', evidence: rejected ? `${rejected} invalid or ambiguous entries skipped; valid observations retained; source completeness unproven` : 'Partial source observations; source completeness unproven' };
         await this.Repository.Publish(attempt, entries, coverage);
     }
 }

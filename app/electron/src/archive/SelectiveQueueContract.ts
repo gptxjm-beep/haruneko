@@ -2,11 +2,11 @@ import type { ArchivePreferences } from './ArchiveUIContract';
 export interface MangaReference { siteId: string; mangaId: string; title: string; siteName: string; }
 export type QueueScope = { mode: 'all' | 'missing' } | { mode: 'range'; from: number; to: number };
 export const QueueScopeLabels = Object.freeze({
-    all: 'All — جميع فصول القائمة المكتشفة مع إعادة استخدام الملفات السليمة',
-    missing: 'Missing — نفس نطاق All حاليًا؛ اسم متوافق قديم، وليس اكتشافًا جديدًا',
-    range: 'نطاق مواضع موثق',
+    all: 'All — discovered chapters; reuse healthy files',
+    missing: 'Missing — same as All today (legacy alias)',
+    range: 'Verified chapter range',
 });
-export const QueueScopeNotice = 'All وMissing يستخدمان القائمة نفسها حاليًا ويتحققان من الملفات السليمة لإعادة استخدامها. الاستئناف لا يوسّع Manifest محفوظًا، ولا يكتشف فصولًا أضيفت بعد اكتماله.';
+export const QueueScopeNotice = 'All and Missing currently use the same saved manifest and reuse healthy files. Resume does not expand a saved manifest or discover chapters added after completion.';
 export type QueueState = 'Queued' | 'Preparing' | 'Downloading' | 'Paused' | 'Review' | 'Failed' | 'Completed' | 'Cancelled';
 export interface SelectedManga extends MangaReference { seq: number; }
 export interface QueueMembership { selected: boolean; queued: boolean; }

@@ -45,10 +45,10 @@ describe('Classic plugin presentation without network or Svelte', () => {
     });
     it('Should distinguish dated user observations from unavailable live health', () => {
         expect(SiteObservation('mangatek')).toMatchObject({ recordedAt: '2026-11-06' });
-        expect(SiteObservation('mangaspark').label).toContain('لا يثبت');
+        expect(SiteObservation('mangaspark').label).toContain('not a site-wide');
         expect(SiteObservation('constructor').recordedAt).toBeNull();
         expect(SiteObservation('__proto__').recordedAt).toBeNull();
-        expect(SiteObservation('unexamined')).toEqual({ recordedAt: null, label: 'لا تتوفر نتيجة فحص حي في المركز.' });
+        expect(SiteObservation('unexamined')).toEqual({ recordedAt: null, label: 'No live health check is available in this hub.' });
     });
     it('Should open the native plugin and clear incompatible media without fetching or touching archive state', () => {
         const previous = english as unknown as MediaContainer<MediaChild>;

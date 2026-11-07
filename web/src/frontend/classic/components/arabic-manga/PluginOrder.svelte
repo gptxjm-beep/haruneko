@@ -1,11 +1,12 @@
 <script lang="ts">
     import { Settings, GlobalSettings } from '../../stores/Settings.svelte';
     import { FrontendResourceKey as R } from '../../../../i18n/ILocale';
+    let { english = false }: { english?: boolean } = $props();
 </script>
 
-<label title={GlobalSettings.Locale[R.Frontend_Classic_Settings_ArabicFirstInfo]()}>
+<label title={english ? 'Show Arabic-tagged sites first in plugin selectors' : GlobalSettings.Locale[R.Frontend_Classic_Settings_ArabicFirstInfo]()}>
     <input type="checkbox" data-testid="arabic-first-preference" bind:checked={Settings.ArabicFirstPlugins.Value} />
-    {GlobalSettings.Locale[R.Frontend_Classic_Settings_ArabicFirst]()}
+    {english ? 'Arabic sites first in plugin selectors' : GlobalSettings.Locale[R.Frontend_Classic_Settings_ArabicFirst]()}
 </label>
 
 <style>

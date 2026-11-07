@@ -5,17 +5,17 @@ import { SiteIndexRepository } from './SiteIndexRepository';
 import { SiteIndexManager } from './SiteIndexManager';
 import type { IndexSiteState, IndexJob } from './SiteIndexContract';
 
-export const IndexStateLabel: Record<IndexSiteState, string> = { queued: 'في الانتظار', updating: 'جارٍ التحديث', succeeded: 'نجح تحديث الفهرس',
-    failed: 'فشل التحديث', stale: 'فهرس قديم محفوظ', cancelled: 'أُلغي', review: 'يحتاج مراجعة' };
-export const IndexJobStateLabel: Record<IndexJob['state'], string> = { running: 'جارٍ التحديث', paused: 'متوقف مؤقتًا', interrupted: 'انقطع دون إنهاء طبيعي', cancelled: 'أُلغي', finished: 'انتهت معالجة المواقع المحددة' };
+export const IndexStateLabel: Record<IndexSiteState, string> = { queued: 'Queued', updating: 'Updating', succeeded: 'Catalog saved',
+    failed: 'Update failed', stale: 'Older catalog retained', cancelled: 'Cancelled', review: 'Needs review' };
+export const IndexJobStateLabel: Record<IndexJob['state'], string> = { running: 'Updating', paused: 'Paused', interrupted: 'Interrupted', cancelled: 'Cancelled', finished: 'Selected updates finished' };
 export function IndexErrorLabel(code: string): string {
-    if (code.startsWith('catalog-needs-review')) return 'نتيجة فارغة أو جزئية أو متعارضة تحتاج مراجعة؛ الفهرس السابق محفوظ.';
-    if (code.startsWith('catalog-conflict')) return 'تغيّر الفهرس أو حالة العملية أثناء الجلب؛ لم تُنشر النتيجة القديمة.';
-    if (code.startsWith('catalog-timeout')) return 'انتهت مهلة جلب القائمة؛ لم تُنشر نتيجة متأخرة.';
-    if (code.startsWith('catalog-storage')) return 'تعذر حفظ الفهرس؛ بقيت آخر قائمة مقبولة.';
-    if (code.startsWith('catalog-access')) return 'تعذر الوصول أو أن قدرة الفهرسة غير متاحة؛ لا نحاول تجاوز الحماية.';
-    if (code.startsWith('catalog-interrupted') || code.startsWith('interrupted:')) return 'انقطعت محاولة سابقة؛ يلزم استئناف صريح ضمن ميزانية المحاولات المحفوظة.';
-    return 'تعذر جلب قائمة الموقع أو قراءتها؛ احتُفظ بالفهرس السابق إن وُجد.';
+    if (code.startsWith('catalog-needs-review')) return 'No usable observation or an ambiguous result. The previous catalog is safe.';
+    if (code.startsWith('catalog-conflict')) return 'A newer catalog or job state was preserved.';
+    if (code.startsWith('catalog-timeout')) return 'Catalog request timed out. Late results were not published.';
+    if (code.startsWith('catalog-storage')) return 'Cannot save the catalog. Previously saved entries remain available.';
+    if (code.startsWith('catalog-access')) return 'Access or indexing capability is unavailable. No protection bypass is attempted.';
+    if (code.startsWith('catalog-interrupted') || code.startsWith('interrupted:')) return 'Previous update was interrupted. Resume explicitly within the saved retry budget.';
+    return 'Cannot fetch or read this catalog. Previously saved entries are retained.';
 }
 export function ArabicCatalogSources(sites: readonly unknown[]) {
     return sites.filter((site): site is MangaPlugin => site instanceof MangaPlugin && site.Tags.Value.some(tag => tag.Category === Tags.Language.Arabic.Category && tag.Title === Tags.Language.Arabic.Title))

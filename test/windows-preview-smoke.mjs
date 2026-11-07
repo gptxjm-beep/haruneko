@@ -110,12 +110,13 @@ async function Stop(page) {
         [...document.querySelectorAll('nav a')].find(node => node.textContent.trim() === 'Arabic Manga').click();
     });
     await page.waitForSelector('#ArabicManga');
+    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Sites').click());
     check('Bundled Classic opens the actual Arabic Manga hub', true);
     await page.waitForFunction(() => [...document.querySelectorAll('#ArabicManga button')].some(button => button.textContent.trim() === 'Update All Arabic Sites' && !button.disabled));
     await page.evaluate(() => [...document.querySelectorAll('#ArabicManga button')].find(button => button.textContent.trim() === 'Update All Arabic Sites').click());
     await page.waitForFunction(async () => { const request = indexedDB.open('HakuNeko'); const db = await new Promise(resolve => request.onsuccess = () => resolve(request.result)); const meta = await new Promise(resolve => { const r = db.transaction('SiteIndexMetadata').objectStore('SiteIndexMetadata').get('mangatek'); r.onsuccess = () => resolve(r.result); }); db.close(); return meta?.state === 'succeeded'; });
     check('Bundled Update All publishes the isolated Arabic catalog without chapter or image requests', true);
-    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'البحث المشترك').click());
+    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Search').click());
     await page.waitForSelector('[data-testid="shared-search-query"]:not(:disabled)');
     await page.type('[data-testid="shared-search-query"]', 'Preview Smoke');
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="shared-search-result"]').length === 2);
@@ -124,9 +125,9 @@ async function Stop(page) {
     await page.evaluate(() => [...document.querySelectorAll('[data-testid="shared-search-result"] button')].filter(button => button.textContent.trim() === 'Add to Queue').forEach(button => button.click()));
     await page.waitForFunction(async () => (await ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'queue-summary' })).value.queued === 2);
     check('Packaged local Worker search, independent selection and individual queue additions work', true);
-    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Download Queue').click());
+    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Downloads').click());
     await page.waitForSelector('[data-testid="personal-queue"]');
-    check('Packaged Download Queue explains equivalent scopes, confirmed membership and SQLite compatibility', await page.evaluate(() => document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All وMissing') && document.querySelector('[data-testid="queue-run-membership"]') !== null && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10')));
+    check('Packaged Downloads explains equivalent scopes, confirmed membership and SQLite compatibility', await page.evaluate(() => document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing') && document.querySelector('[data-testid="queue-run-membership"]') !== null && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10')));
     const queueBefore = await page.evaluate(async () => {
         const request = async command => { const reply = await ipcRenderer.invoke('ArchiveRepository::Request', command); if (!reply.ok) throw new Error(reply.error.message); return reply.value; };
         const defaults = await request({ operation: 'ui-preferences' }); const preferences = { ...defaults.preferences, rootId: 'smoke-root' };
@@ -143,7 +144,7 @@ async function Stop(page) {
     check('SQLite preferences survive a real application relaunch', restored.ok && restored.value.preferences.policy.delayMs === 1500);
     await again.evaluate(() => [...document.querySelectorAll('nav a')].find(node => node.textContent.trim() === 'Arabic Manga').click());
     await again.waitForSelector('#ArabicManga');
-    await again.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Download Queue').click());
+    await again.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Downloads').click());
     await again.waitForFunction(() => document.querySelectorAll('[data-testid="personal-entry"]').length === 3);
     check('Actual Classic queue reopens with persisted entries and does not auto-start them', true);
     const resumed = await again.evaluate(async before => {

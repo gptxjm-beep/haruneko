@@ -31,19 +31,19 @@ export function FilterHubSites<T extends PluginSummary>(plugins: readonly T[], q
 
 /** User observations, never a live health certificate. No requests or inference from a connector's name. */
 const observations: Record<string, string> = {
-    mangalover: 'بلاغ مستخدم: نجاح وفشل مختلط في صور بعض الفصول؛ السبب غير محسوم.',
-    mangatek: 'بلاغ مستخدم: فشل استخراج مصدر الصور في العينة الأخيرة.',
-    mangaspark: 'بلاغ مستخدم: عينات متعددة تعمل؛ لا يثبت سلامة جميع الأعمال.',
-    azoraworld: 'بلاغ مستخدم: بعض الفصول بلا صفحات وأخرى تعمل.',
-    'on-manga': 'بلاغ مستخدم: رفض وصول عند جلب القائمة.',
-    mangastarz: 'بلاغ مستخدم: مهلة عند جلب القائمة.',
-    mangalek: 'بلاغ مستخدم: مهلة عند جلب القائمة.',
-    nijitranslations: 'بلاغ مستخدم: مهلة عند جلب القائمة.',
-    shqqaa: 'بلاغ مستخدم: عينات من القائمة بلا فصول.',
+    mangalover: 'User report: mixed chapter image results; cause unconfirmed.',
+    mangatek: 'User report: image source extraction failed in the latest sample.',
+    mangaspark: 'User report: several working samples; not a site-wide health check.',
+    azoraworld: 'User report: some chapters have no pages; others work.',
+    'on-manga': 'User report: catalog access denied.',
+    mangastarz: 'User report: catalog request timed out.',
+    mangalek: 'User report: catalog request timed out.',
+    nijitranslations: 'User report: catalog request timed out.',
+    shqqaa: 'User report: sampled manga have no chapters.',
 };
 export function SiteObservation(id: string): { label: string; recordedAt: string | null } {
     const label = Object.hasOwn(observations, id) ? observations[id] : undefined;
-    return { label: label ?? 'لا تتوفر نتيجة فحص حي في المركز.', recordedAt: label ? '2026-11-06' : null };
+    return { label: label ?? 'No live health check is available in this hub.', recordedAt: label ? '2026-11-06' : null };
 }
 
 export interface ClassicNavigation {

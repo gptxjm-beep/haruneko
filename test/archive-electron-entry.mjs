@@ -77,10 +77,11 @@ try {
     for (const check of searchChecks) assert.equal(check.passed, true, check.name);
     const queueChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SELECTIVE_QUEUE_TEST_SCRIPT, 'utf8'));
     for (const check of queueChecks) assert.equal(check.passed, true, check.name);
-    const indexChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_TEST_SCRIPT, 'utf8'));
-    for (const check of indexChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
     for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
+    // This script deliberately leaves an unfinished catalog job for the reload checks below.
+    const indexChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SITE_INDEX_TEST_SCRIPT, 'utf8'));
+    for (const check of indexChecks) assert.equal(check.passed, true, check.name);
     if (process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT) await fs.writeFile(process.env.HARUNEKO_ARCHIVE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
     const fixture = await window.webContents.executeJavaScript('globalThis.archiveUIFixture');
     const queueFixture = await window.webContents.executeJavaScript('globalThis.selectiveQueueFixture');

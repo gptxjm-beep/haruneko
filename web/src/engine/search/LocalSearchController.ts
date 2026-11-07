@@ -33,13 +33,13 @@ export class LocalSearchController {
             this.persistenceReady = true;
             this.State.Value = { ...this.State.Value, preference: ValidSearchPreference({ ...value, ...this.edits }) };
             if (Object.keys(this.edits).length) this.Save();
-        }).catch(error => { this.initialized = undefined; this.State.Value = { ...this.State.Value, status: 'error', error: error instanceof MediaDatabaseBlockedError ? 'فتح قاعدة الفهارس محجوب بنافذة قديمة. أغلقها ثم أعد المحاولة؛ لم تُحذف البيانات.' : 'تعذر تحميل تفضيلات البحث المحلي؛ لم تُجرَ طلبات شبكة.' }; });
+        }).catch(error => { this.initialized = undefined; this.State.Value = { ...this.State.Value, status: 'error', error: error instanceof MediaDatabaseBlockedError ? 'Catalog database upgrade is blocked by an older window. Close it and retry. Data has not been deleted.' : 'Cannot load local search preferences. No site requests were made.' }; });
     }
     private Save(): void {
         if (!this.persistenceReady) return;
         const preference = { ...this.State.Value.preference };
         this.saves = this.saves.catch(() => {}).then(() => this.storage.SavePersistent(preference, Store.Settings, SearchPreferenceKey));
-        void this.saves.catch(() => { this.State.Value = { ...this.State.Value, error: 'تعذر حفظ موضع البحث؛ النتائج المحلية لم تُحذف.' }; });
+        void this.saves.catch(() => { this.State.Value = { ...this.State.Value, error: 'Cannot save the search position. Local results were not deleted.' }; });
     }
     public async Flush(): Promise<void> { await this.saves; }
     public SetActive(active: boolean): void { this.edits.active = active; this.State.Value = { ...this.State.Value, preference: { ...this.State.Value.preference, active } }; this.Save(); }
@@ -63,7 +63,7 @@ export class LocalSearchController {
         } catch(error) {
             if (serial !== this.serial || (error as Error)?.name === 'AbortError') return;
             this.State.Value = { ...this.State.Value, status: 'error', result: null, error: (error as Error)?.message === 'blocked'
-                ? 'فتح قاعدة الفهارس محجوب بنافذة قديمة. أغلقها ثم أعد المحاولة؛ لم تُحذف البيانات.' : 'تعذر البحث في الفهارس المحلية أو تغيرت مراجعاتها أثناء القراءة. أعد المحاولة دون تحديث المواقع.' };
+                ? 'Catalog database upgrade is blocked by an older window. Close it and retry. Data has not been deleted.' : 'Cannot read local catalogs, or their revisions changed. Retry the search without updating sites.' };
         }
     }
     public Close(): void { clearTimeout(this.timer); this.serial++; this.Client.Close(); this.channel?.close(); }

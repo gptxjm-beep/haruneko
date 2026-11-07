@@ -46,14 +46,19 @@
     }
     await input('Berserk Queue'); await click('Add to Queue'); await wait(async () => (await queue.List()).length === 1);
     record('Selections persist across different searches and sources while direct addition is independent', (await queue.Selections()).map(ref => ref.mangaId).join(',') === 'one,bleach' && (await queue.List())[0].mangaId === 'berserk');
+    await wait(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Saved selections (2)'));
+    await click('Saved selections (2)');
+    await wait(() => document.querySelectorAll('[data-testid="personal-selections"] [data-testid="personal-entry"]').length === 2);
+    record('Saved selections open inside Search without replacing its query or data', UI.hubSection === 'search' && document.querySelector('[data-testid="shared-search-query"]').value === 'Berserk Queue' && (await queue.Selections()).length === 2);
+    await click('Saved selections (2)');
     await click('Add Selected to Queue'); await wait(async () => (await queue.List()).length === 3);
     await queue.Add(refs[0]);
     record('Bulk and individual additions share one queue, preserve first selection order and never start a download', (await queue.List()).map(ref => ref.mangaId).join(',') === 'berserk,one,bleach' && images === 0 && catalogs === 0);
     await input('One Piece Queue'); await wait(() => document.querySelector('[data-testid="shared-search-result"] input').checked);
-    record('Returning to a previous search distinguishes independent selection and queue membership', queue.State.Value.flags[QueueIdentity(refs[0])] === true && document.querySelector('[data-testid="shared-search-result"]').textContent.includes('مضاف إلى القائمة'));
+    record('Returning to a previous search distinguishes independent selection and queue membership', queue.State.Value.flags[QueueIdentity(refs[0])] === true && document.querySelector('[data-testid="shared-search-result"]').textContent.includes('Added to downloads'));
     await SaveManualMediaList(a.Identifier, [{ id: 'berserk', title: 'Berserk Queue' }]);
     UI.hubSection = 'selections'; await tick();
-    await wait(() => document.querySelector('[data-testid="personal-selections"]')?.textContent.includes('لم يعد موجودًا'));
+    await wait(() => document.querySelector('[data-testid="personal-selections"]')?.textContent.includes('missing from the current catalog'));
     record('A disappeared accepted reference is retained in selection review with a warning', (await queue.Selections()).length === 2);
     UI.hubSection = 'queue'; await tick(); await wait(() => document.querySelector('[data-testid="personal-queue"]'));
     let rows = await queue.List(); await queue.Edit(rows[2].seq, 'up'); rows = await queue.List();
@@ -64,7 +69,7 @@
     for (const [mangaId, title] of [['unknown', 'Unknown Order Queue'], ['bad', 'Invalid Image Queue'], ['extra', 'Over Budget Queue']]) await queue.Add({ siteId: a.Identifier, mangaId, title, siteName: a.Title });
     const grant = await client.Request({ operation: 'choose-root' }), defaults = await client.Request({ operation: 'ui-preferences' });
     await click('Start Downloads / Resume…'); await wait(() => document.querySelector('[data-testid="queue-setup"]'));
-    record('The actual queue UI accurately explains equivalent All and Missing and the SQLite downgrade restriction', document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All وMissing يستخدمان القائمة نفسها') && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10'));
+    record('The actual queue UI accurately explains equivalent All and Missing and the SQLite downgrade restriction', document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing currently use the same') && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10'));
     record('Start requires an explicit setup confirmation and exposes the frozen development limits', [...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled && document.querySelector('[data-testid="queue-budget"]').textContent.includes('/20'));
     // Edit only this queue's setup. General archiving and manual download defaults must remain untouched.
     for (const [label, value] of [['Delay between requests', '100'], ['Retry delay', '1000'], ['Maximum attempts', '1'], ['Languages', 'ar']]) {
@@ -75,7 +80,7 @@
     if (!websiteFolder.checked) websiteFolder.click();
     await tick();
     // The form contains other checkboxes; select the explicit confirmation by its label.
-    const explicit = [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('أؤكد')).querySelector('input'); explicit.click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
+    const explicit = [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('Start this limited run')).querySelector('input'); explicit.click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
     await wait(() => images === 1);
     const confirmedBatch = (await client.Request({ operation: 'queue-summary' })).batchId;
     await queue.Add({ siteId: a.Identifier, mangaId: 'late-addition', title: 'Added during first download', siteName: a.Title });
@@ -86,7 +91,7 @@
     const paused = await client.Request({ operation: 'queue-summary' });
     record('Pause finishes the owned chapter and persists its receipt and cumulative attempt budget', paused.chaptersStarted === 1 && order[0][0] === 'berserk' && order[0][1] === 'old');
     await click('Start Downloads / Resume…'); await wait(() => document.querySelector('[data-testid="queue-setup"]'));
-    [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('أؤكد')).querySelector('input').click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
+    [...document.querySelectorAll('[data-testid="queue-setup"] label')].find(label => label.textContent.includes('Start this limited run')).querySelector('input').click(); await tick(); await wait(() => ![...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled); await click('Start Downloads');
     await wait(async () => (await client.Request({ operation: 'queue-summary' })).state === 'Limited' && !runner.Running);
     rows = await queue.List(); const summary = await client.Request({ operation: 'queue-summary' });
     record('Pause and resume retain original run membership and never start late additions or resurrect an old queue identity', summary.batchId === confirmedBatch && summary.waitingNextRun === 2 && rows.filter(row => ['late-addition', 'readded-later'].includes(row.mangaId)).every(row => row.state === 'Queued' && !row.sessionId));

@@ -80,13 +80,13 @@
     await input(document.querySelector('[data-testid="shared-search-query"]'), 'one piece');
     await wait(() => controller.State.Value.status === 'ready');
     record('The actual Classic hub shows grouped results and excludes multilingual-only sources', document.querySelectorAll('[data-testid="shared-search-result"]').length === 2 && ![...document.querySelectorAll('[data-testid="shared-search-group"]')].some(element => element.dataset.sourceId === multi.Identifier));
-    record('The hub labels old indexes and uncertain coverage without asserting image health', document.querySelector('[data-testid="shared-search"]').textContent.includes('فهرس قديم') && document.querySelector('[data-testid="shared-search"]').textContent.includes('تغطية غير مؤكدة'));
+    record('The hub labels old indexes and uncertain coverage without asserting image health', document.querySelector('[data-testid="shared-search"]').textContent.includes('Cached library') && document.querySelector('[data-testid="shared-search"]').textContent.includes('Unconfirmed coverage'));
     const requestBaseline = { catalogs, chapters, images };
     await input(document.querySelector('[data-testid="shared-search-query"]'), 'pir');
     await input(document.querySelector('[data-testid="shared-search-query"]'), 'pirate');
     const filter = document.querySelector('[data-testid="shared-search-site"]'); filter.value = a.Identifier; filter.dispatchEvent(new Event('change', { bubbles: true })); await tick();
     await wait(() => controller.State.Value.status === 'ready' && controller.State.Value.result.total === 130);
-    await click('صفحة النتائج التالية'); await wait(() => controller.State.Value.status === 'ready' && controller.State.Value.preference.page === 2);
+    await click('Next'); await wait(() => controller.State.Value.status === 'ready' && controller.State.Value.preference.page === 2);
     record('Typing, filtering and paginating never calls website catalog, chapter, image or download entry points', catalogs === requestBaseline.catalogs && chapters === requestBaseline.chapters && images === requestBaseline.images && HakuNeko.DownloadManager.Queue.Value.length === 0);
     record('The DOM contains only the selected page of matching manga rows', document.querySelectorAll('[data-testid="shared-search-result"]').length === 25);
     const panel = document.querySelector('[data-testid="shared-search-scroll"]'); panel.scrollTop = 300; panel.dispatchEvent(new Event('scroll')); await new Promise(resolve => setTimeout(resolve, 150));

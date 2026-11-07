@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
-    import { Button, Tile } from 'carbon-components-svelte';
+    import { Button } from 'carbon-components-svelte';
     import { FilterHubSites, IsMultilingual, OpenPlugin, SiteObservation, type SiteScope } from '../../models/PluginPresentation';
     import { Store as UI } from '../../stores/Stores.svelte';
     import { GetSiteIndexController, ArabicCatalogSources, IndexStateLabel, IndexJobStateLabel, IndexErrorLabel } from '../../../../engine/catalog/SiteIndexController';
@@ -10,8 +10,7 @@
     import PluginOrder from './PluginOrder.svelte';
 
     let heading: HTMLHeadingElement;
-    let sectionChanged = false;
-    async function chooseSection(section: 'sites' | 'search' | 'selections' | 'queue') { sectionChanged = true; UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
+    async function chooseSection(section: 'sites' | 'search' | 'selections' | 'queue') { UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
     const indexer = GetSiteIndexController();
     const searcher = GetLocalSearchController();
     let index = $state(indexer.State.Value);
@@ -22,14 +21,14 @@
     const observeActivity = value => { activity = value; };
     indexer.State.Subscribe(observeIndex); indexer.Activity.Subscribe(observeActivity);
     onDestroy(() => { indexer.State.Unsubscribe(observeIndex); indexer.Activity.Unsubscribe(observeActivity); });
-    onMount(() => { void searcher.Initialize().then(() => { if (!sectionChanged && searcher.State.Value.preference.active) UI.hubSection = 'search'; }); heading?.focus(); void indexer.Initialize().then(() => { initialized = true; }).catch(() => { actionError = 'تعذر فتح سجل الفهرسة؛ لم يبدأ تحديث.'; }); });
-    async function command(action: 'start' | 'resume' | 'pause' | 'cancel') {
+    onMount(() => { void searcher.Initialize(); heading?.focus(); void indexer.Initialize().then(() => { initialized = true; }).catch(() => { actionError = 'Cannot open the catalog ledger. No update has started.'; }); });
+    async function command(action: 'start' | 'resume' | 'pause' | 'cancel', siteId?: string) {
         actionError = '';
         try {
-            if (action === 'start') await indexer.Start();
+            if (action === 'start') await indexer.Start(siteId);
             else if (action === 'resume') await indexer.Resume();
             else await indexer.Stop(action === 'cancel');
-        } catch { actionError = 'تعذر تنفيذ الطلب: توجد عملية قائمة أو سجل يحتاج استئنافًا، أو أن التخزين/القفل غير متاح.'; }
+        } catch { actionError = 'Cannot start this update. Resume or cancel the existing job first, or check local storage access.'; }
     }
     let completed = $derived(index.job?.items.filter(item => !['queued', 'updating'].includes(item.state)).length ?? 0);
     let eligible = $derived(new Set(ArabicCatalogSources(HakuNeko.PluginController.WebsitePlugins).map(source => source.id)));
@@ -44,106 +43,68 @@
     $effect(() => { query; scope; page = 1; });
 </script>
 
-<section id="ArabicManga" lang="ar" dir="rtl" aria-labelledby="arabic-manga-title" data-testid="arabic-manga-hub">
-    <header>
-        <div><h1 id="arabic-manga-title" tabindex="-1" bind:this={heading}>Arabic Manga</h1><p>مركز المانجا العربية — المواقع المدعومة</p></div>
-        <Button kind="secondary" onclick={() => (UI.page = 'media')}>العودة إلى Media List</Button>
-    </header>
-    <nav aria-label="أقسام مركز المانجا العربية">
-        <button type="button" aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>المواقع</button>
-        <button type="button" aria-current={UI.hubSection === 'search' ? 'page' : undefined} onclick={() => chooseSection('search')}>البحث المشترك</button>
-        <span>المكتبة — غير متاحة بعد</span>
-        <button type="button" aria-current={UI.hubSection === 'selections' ? 'page' : undefined} onclick={() => chooseSection('selections')}>الاختيارات</button>
-        <button type="button" aria-current={UI.hubSection === 'queue' ? 'page' : undefined} onclick={() => chooseSection('queue')}>Download Queue</button>
+<section id="ArabicManga" lang="en" dir="ltr" aria-labelledby="arabic-manga-title" data-testid="arabic-manga-hub">
+    <header class="hub-heading"><div><h1 id="arabic-manga-title" tabindex="-1" bind:this={heading}>Arabic Manga</h1><p>Your saved Arabic manga catalogs</p></div><Button kind="ghost" size="small" onclick={() => (UI.page = 'media')}>Back to Media List</Button></header>
+    <nav aria-label="Arabic Manga sections">
+        <button aria-current={['search','selections'].includes(UI.hubSection) ? 'page' : undefined} onclick={() => chooseSection('search')}>Search</button>
+        <button aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>Sites</button>
+        <button aria-current={UI.hubSection === 'queue' ? 'page' : undefined} onclick={() => chooseSection('queue')}>Downloads</button>
     </nav>
-    {#if UI.hubSection === 'search'}
-        <SharedSearch />
-    {:else if UI.hubSection === 'selections' || UI.hubSection === 'queue'}
-        {#key UI.hubSection}<PersonalQueue selections={UI.hubSection === 'selections'} />{/key}
-    {:else}
-    <p class="intro">اختر موقعًا لفتح قائمته وبحثه الأصلي في Media List. فتح المركز أو اختيار موقع لا يحدّث الفهارس ولا يبدأ تنزيلًا.</p>
-    <section class="index-controls" aria-label="تحديث فهارس المواقع" data-testid="catalog-controls">
-        <Button disabled={!initialized || activity.owned || !!index.job && !['finished', 'cancelled'].includes(index.job.state)} onclick={() => command('start')}>Update All Arabic Sites</Button>
-        {#if index.job && !['finished', 'cancelled'].includes(index.job.state)}
-            <Button kind="secondary" disabled={!initialized || activity.owned} onclick={() => command('resume')}>استئناف تحديث الفهارس</Button>
-            <Button kind="secondary" disabled={!activity.owned} onclick={() => command('pause')}>إيقاف مؤقت</Button>
-            <Button kind="danger" disabled={!initialized} onclick={() => command('cancel')}>إلغاء تحديث الفهارس</Button>
+    <div class="update-bar" data-testid="catalog-controls">
+        <Button size="small" kind="secondary" disabled={!initialized || activity.owned || !!index.job && !['finished','cancelled'].includes(index.job.state)} onclick={() => command('start')}>{UI.hubSection === 'sites' ? 'Update All Arabic Sites' : 'Update All'}</Button>
+        {#if index.job && !['finished','cancelled'].includes(index.job.state)}
+            <Button size="small" kind="ghost" disabled={!initialized || activity.owned} onclick={() => command('resume')}>Resume Update</Button>
+            <Button size="small" kind="ghost" disabled={!activity.owned} onclick={() => command('pause')}>Pause Update</Button>
+            <Button size="small" kind="danger-ghost" disabled={!initialized} onclick={() => command('cancel')}>Cancel Update</Button>
         {/if}
-        <p>تحديث قوائم المانجا فقط، موقع واحد في المرة. لا فصول ولا صور. عدد الموصلات المؤهلة: {eligible.size}. المواقع دون وسم عربي صريح والموصلات التي لا تدعم فهرسة المانجا خارج هذه العملية.</p>
-        {#if index.job}<p role="status">حالة العملية: {IndexJobStateLabel[index.job.state]} • منجز {completed} / {index.job.items.length} • متبقٍ {index.job.items.length - completed}</p>{/if}
-        {#if activity.draining}<p role="alert">ننتظر انتهاء طلب موصل قديم لا يدعم الإلغاء. لن يتوازى معه موقع آخر. يمكنك طلب الإيقاف أو الإلغاء؛ إذا لم ينتهِ الطلب يلزم إغلاق التطبيق قبل استئناف جديد.</p>{/if}
-        {#if actionError || activity.error}<p role="alert">{actionError || activity.error}</p>{/if}
-    </section>
-    <div class="filters">
-        <label>تصفية المواقع
-            <input type="search" data-testid="arabic-site-filter" bind:value={query} placeholder="اسم الموقع أو معرّفه أو مضيفه" />
-        </label>
-        <label>إعلان اللغة
-            <select bind:value={scope} data-testid="arabic-site-scope">
-                <option value="arabic">العربية معلنة صراحة</option>
-                <option value="multilingual-unconfirmed">متعدد اللغات — العربية غير مؤكدة</option>
-            </select>
-        </label>
+        <span>{index.sites.filter(site => eligible.has(site.siteId) && site.count > 0).length} saved libraries / {eligible.size} Arabic sites</span>
+        {#if index.job}<span role="status">{IndexJobStateLabel[index.job.state]} · {completed}/{index.job.items.length} sites · {index.job.items.length - completed} remaining</span>{/if}
+        {#if index.job?.current}<strong>Updating: {HakuNeko.PluginController.WebsitePlugins.find(site => site.Identifier === index.job.current)?.Title ?? index.job.current}</strong>{/if}
     </div>
-    <p class="note">{scope === 'arabic' ? 'هذه المواقع تحمل وسم اللغة العربية في الموصل. الوسم لا يثبت سلامة الموقع أو اكتمال فهرسه.' : 'هذه مواقع متعددة اللغات دون وسم عربي صريح. لا نعتبر دعم العربية مثبتًا فيها.'}</p>
-    <div class="preference"><PluginOrder /><small>يطبق هذا التفضيل على قوائم اختيار الموصلات لجميع اللغات. مواقع المركز مرتبة أبجديًا.</small></div>
-    <p role="status" aria-live="polite">{sites.length} موقعًا مطابقًا • صفحة {page} من {pages}</p>
-    <div class="sites">
+    {#if activity.draining}<p role="status">Waiting for an older connector request to settle before another site can start.</p>{/if}
+    {#if actionError || activity.error}<p role="alert">{actionError || activity.error}</p>{/if}
+    {#if ['search','selections'].includes(UI.hubSection)}
+        <SharedSearch />
+    {:else if UI.hubSection === 'queue'}
+        <PersonalQueue />
+    {:else}
+        <div class="filters"><label>Find a site<input type="search" data-testid="arabic-site-filter" bind:value={query} placeholder="Name, ID or host" /></label>
+            <label>Language support<select bind:value={scope} data-testid="arabic-site-scope"><option value="arabic">Explicit Arabic support</option><option value="multilingual-unconfirmed">Multilingual — Arabic unconfirmed</option></select></label></div>
+        <div class="preference"><PluginOrder english /><small>Language tags identify sources; catalog availability does not certify image downloads.</small></div>
+        <p role="status">{sites.length} sites · Page {page} of {pages}</p>
+        <div class="sites">
         {#each visible as site (site.Identifier)}
+            {@const saved = summaries.get(site.Identifier)}
             {@const observation = SiteObservation(site.Identifier)}
-            <Tile>
-                <article data-testid="arabic-site" data-site-id={site.Identifier}>
-                    <h2 dir="auto">{site.Title}</h2>
-                    <p class="host" dir="ltr">{site.URI.hostname} · {site.Identifier}</p>
-                    <p>{scope === 'arabic' ? 'العربية معلنة' : 'العربية غير مؤكدة'}{IsMultilingual(site) ? ' • متعدد اللغات' : ''}</p>
-                    {#if !eligible.has(site.Identifier)}<p>غير مؤهل للتحديث الجماعي: يلزم موصل مانجا يعلن دعم العربية صراحة. هذا ليس حكمًا على سلامة الموقع.</p>{/if}
-                    {#if summaries.has(site.Identifier)}
-                        {@const saved = summaries.get(site.Identifier)}
-                        <div data-testid="catalog-site-state">
-                            <strong>{IndexStateLabel[saved.state]}</strong>
-                            {#if saved.state !== 'succeeded' && (saved.count || saved.lastSuccess)}<p>فهرس قديم محفوظ؛ لن يُستبدل بنتيجة غير موثوقة.</p>{/if}
-                            <p>المحفوظ: {saved.count} • المكتشف في المحاولة: {saved.discovered ?? 'غير معروف'}</p>
-                            <p>آخر نجاح: {saved.lastSuccess ? new Date(saved.lastSuccess).toLocaleString() : 'غير مسجّل'}</p>
-                            <p>آخر محاولة: {saved.lastAttempt ? new Date(saved.lastAttempt).toLocaleString() : 'غير مسجّلة'}</p>
-                            <p>تغطية الفهرس المحفوظ: {saved.coverage.state} — {saved.coverage.evidence}</p>
-                            {#if saved.error}<p role="status">{IndexErrorLabel(saved.error)}</p>{/if}
-                        </div>
-                    {/if}
-                    <p class="observation">{observation.label}</p>
-                    {#if observation.recordedAt}<small>تاريخ تسجيل البلاغ: {observation.recordedAt} — ليست نتيجة فحص حي من المركز.</small>{/if}
-                    <Button size="small" onclick={() => OpenPlugin(UI, site)}>فتح قائمة المانجا</Button>
-                </article>
-            </Tile>
-        {:else}
-            <p class="empty">لا توجد مواقع مطابقة. غيّر التصفية أو إعلان اللغة.</p>
-        {/each}
-    </div>
-    <div class="pagination" aria-label="صفحات المواقع">
-        <Button kind="secondary" size="small" disabled={page <= 1} onclick={() => page--}>السابق</Button>
-        <span>{page} / {pages}</span>
-        <Button kind="secondary" size="small" disabled={page >= pages} onclick={() => page++}>التالي</Button>
-    </div>
+            <article data-testid="arabic-site" data-site-id={site.Identifier}>
+                <div class="card-title"><h2 dir="auto">{site.Title}</h2><span class:available={!!saved?.count} class="badge">{saved?.count ? 'Searchable' : saved ? 'No saved library' : 'Not checked'}</span></div>
+                <p class="host" dir="ltr">{site.URI.hostname}</p>
+                {#if scope === 'multilingual-unconfirmed'}<small class="pending">Arabic unconfirmed</small>{/if}
+                <div data-testid="catalog-site-state" class="stats"><strong>{saved?.count ?? '—'} saved manga</strong><span class:error={saved && ['failed','stale'].includes(saved.state)} class:pending={saved && ['updating','review'].includes(saved.state)}>{saved ? IndexStateLabel[saved.state] : 'No update recorded'}</span></div>
+                <p class="muted">Last saved update: {saved?.lastSuccess ? new Date(saved.lastSuccess).toLocaleString() : 'Not recorded'}</p>
+                {#if saved?.coverage.state !== 'complete'}<small class="pending">Source coverage unconfirmed; saved entries remain searchable.</small>{/if}
+                {#if saved?.error}<small class="error">{IndexErrorLabel(saved.error)}</small>{/if}
+                <div class="actions"><Button size="small" kind="secondary" disabled={!initialized || !eligible.has(site.Identifier) || activity.owned || !!index.job && !['finished','cancelled'].includes(index.job.state)} onclick={() => command('start', site.Identifier)}>Update</Button><Button size="small" kind="ghost" title="Open this connector in the original Media List" onclick={() => OpenPlugin(UI, site)}>Open Site</Button></div>
+                <details><summary>Details</summary><p>ID: <bdi>{site.Identifier}</bdi> · {IsMultilingual(site) ? 'Multilingual' : 'Arabic'}</p><p>{observation.label}</p>{#if observation.recordedAt}<small>User report recorded {observation.recordedAt}; not a live test.</small>{/if}
+                    {#if saved}<p>Observed this attempt: {saved.discovered ?? 'Unknown'} · Coverage: {saved.coverage.state}</p><p>{saved.coverage.evidence}</p>{/if}
+                    {#if !eligible.has(site.Identifier)}<p>Bulk indexing requires an original manga connector with an explicit Arabic tag.</p>{/if}</details>
+            </article>
+        {:else}<p>No matching sites. Try another filter.</p>{/each}
+        </div>
+        <div class="pagination"><Button size="small" kind="ghost" disabled={page <= 1} onclick={() => page--}>Previous</Button><span>{page}/{pages}</span><Button size="small" kind="ghost" disabled={page >= pages} onclick={() => page++}>Next</Button></div>
     {/if}
-    <aside>الأرشفة الشاملة ما زالت تجريبية. Archive Site يحتفظ بجلساته وحدوده: خمس مانجات وعشرون محاولة فصل، واحتياطي مساحة 50 GiB على الأقل.</aside>
+    <aside>Experimental archiving: 5 manga, 20 chapter attempts, at least 50 GiB free-space reserve. Catalog updates fetch titles only.</aside>
 </section>
-
 <style>
-    #ArabicManga { height: 100%; overflow-y: auto; padding: 1.25rem; color: var(--cds-text-01); }
-    header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
-    h1 { font-size: 1.8rem; } h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
-    nav { display: flex; flex-wrap: wrap; gap: 1rem; border-bottom: 1px solid var(--cds-ui-03); padding: .75rem 0; }
-    nav button { background: transparent; border: none; font: inherit; cursor: pointer; padding: 0; color: var(--cds-text-01); }
-    nav span { color: var(--cds-text-02); } nav [aria-current] { color: var(--cds-text-01); font-weight: bold; }
-    .intro, .note, .preference, aside { margin: 1rem 0; line-height: 1.6; }
-    .note, small { color: var(--cds-text-02); }
-    .index-controls { margin: 1rem 0; padding: 1rem; border: 1px solid var(--cds-ui-03); line-height: 1.6; }
-    .filters { display: flex; flex-wrap: wrap; gap: 1rem; }
-    label { display: grid; gap: .5rem; flex: 1 1 15rem; }
-    input, select { padding: .75rem; min-width: 0; width: 100%; background: var(--cds-field-01); color: var(--cds-text-01); border: 1px solid var(--cds-ui-03); font: inherit; }
-    .sites { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); gap: 1rem; margin: 1rem 0; }
-    article { display: flex; flex-direction: column; gap: .65rem; height: 100%; }
-    .host { overflow-wrap: anywhere; font-size: .8rem; color: var(--cds-text-02); }
-    .observation { line-height: 1.5; flex: 1; }
-    .pagination { display: flex; justify-content: center; gap: 1rem; align-items: center; }
-    aside { padding: .75rem; border-inline-start: 3px solid var(--cds-ui-03); }
+    #ArabicManga { height:100%; overflow-y:auto; padding:1rem 1.25rem; color:var(--cds-text-01); background:var(--cds-ui-background); }
+    .hub-heading,.card-title,.stats,.actions,.update-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.5rem; }
+    .hub-heading { margin-bottom:1rem; } h1 { font-size:1.6rem; } h2 { font-size:1rem; overflow-wrap:anywhere; } p { line-height:1.45; margin:.35rem 0; }
+    nav { display:flex; gap:.5rem; border-bottom:1px solid var(--cds-ui-03); margin-bottom:.8rem; } nav button { background:transparent; color:var(--cds-text-02); border:0; border-bottom:3px solid transparent; padding:.7rem 1.2rem; font:inherit; cursor:pointer; } nav [aria-current] { border-color:var(--cds-interactive-01); color:var(--cds-text-01); font-weight:600; }
+    .update-bar { justify-content:flex-start; padding:.65rem; background:var(--cds-ui-01); border-radius:4px; font-size:.8rem; margin-bottom:1rem; }
+    .filters { display:flex; flex-wrap:wrap; gap:.75rem; } label { display:grid; gap:.4rem; flex:1 1 12rem; font-size:.85rem; }
+    input,select { background:var(--cds-field-01); color:var(--cds-text-01); border:1px solid var(--cds-ui-03); padding:.6rem; font:inherit; min-width:0; width:100%; }
+    .sites { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,17rem),1fr)); gap:.75rem; margin:.75rem 0; }
+    article { display:flex; flex-direction:column; padding:.85rem; gap:.35rem; background:var(--cds-ui-01); border:1px solid var(--cds-ui-03); border-radius:5px; }
+    .badge { border:1px solid var(--cds-ui-03); border-radius:20px; padding:.2rem .5rem; font-size:.7rem; } .available { color:var(--cds-support-success); } .pending { color:var(--cds-support-warning); } .error { color:var(--cds-support-error); } .muted,.host,small { color:var(--cds-text-02); font-size:.78rem; }
+    .actions { margin-top:auto; justify-content:flex-start; } details { font-size:.8rem; overflow-wrap:anywhere; } summary { cursor:pointer; color:var(--cds-text-02); } .preference { display:flex; align-items:center; flex-wrap:wrap; gap:1rem; } .pagination { display:flex; justify-content:center; align-items:center; gap:1rem; } aside { margin-top:1rem; font-size:.75rem; color:var(--cds-text-02); }
 </style>
