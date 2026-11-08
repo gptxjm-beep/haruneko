@@ -21,7 +21,16 @@ let other;
 try {
     // Test-only native dialog fixture. Production code contains no test path override.
     dialog.showOpenDialog = async (_window, options) => ({ canceled: false, filePaths: [options.properties.includes('openFile') ? path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'cover.png') : root] });
-    let openedMangaFolder = false; shell.openPath = async target => { openedMangaFolder = target === path.join(root, 'Queue source A', 'Berserk Queue'); return ''; };
+    let openedMangaFolder = false;
+    shell.openPath = async target => {
+        const expected = path.join(root, 'Queue source A', 'Berserk Queue');
+        const [actualIdentity, expectedIdentity] = await Promise.all([fs.stat(target, { bigint: true }), fs.stat(expected, { bigint: true })]);
+        openedMangaFolder = actualIdentity.isDirectory() && expectedIdentity.isDirectory()
+            && actualIdentity.dev === expectedIdentity.dev && actualIdentity.ino === expectedIdentity.ino
+            && await fs.realpath(target) === await fs.realpath(expected);
+        if (process.env.GITHUB_ACTIONS) console.log(`::notice title=Open Folder fixture::Expected native directory: ${openedMangaFolder}; identical path spelling: ${target === expected}`);
+        return '';
+    };
     ipcMain.handle('QueueTest::FolderOpened', () => openedMangaFolder);
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path.join(directory, 'isolated-download-report.json') });
     const url = process.env.HARUNEKO_ARCHIVE_TEST_URL;
