@@ -193,7 +193,7 @@ export async function FetchMangasMultiPageAJAX(this: MangaScraper, provider: Man
             const { id, title } = MangaInfoExtractor(element);
             return new Manga(this, provider, id, title.trim());
         });
-        provider.ReportCatalogProgress(mangas.length);
+        provider.ReportCatalogProgress(mangas.length, mangas);
         mangas.length > 0 ? mangaList.push(...mangas) : run = false;
         await Delay(throttle);
     }

@@ -29,9 +29,9 @@ class Ledger {
     }
     async Stage(attempt: IndexAttempt, _offset: number, entries: CatalogEntry[]) { this.candidates.set(attempt.id, [...this.candidates.get(attempt.id) ?? [], ...entries]); }
     async Candidate(attempt: IndexAttempt) { return this.candidates.get(attempt.id) ?? []; }
-    async Publish(attempt: IndexAttempt, entries: CatalogEntry[], coverage: CatalogCoverage) {
-        this.published(attempt.siteId, entries, coverage); this.job!.items.find(item => item.siteId === attempt.siteId)!.state = 'succeeded';
-        Object.assign(this.sites.get(attempt.siteId)!, { state: 'succeeded', count: entries.length, coverage }); this.job!.current = null;
+    async Publish(attempt: IndexAttempt, entries: CatalogEntry[], coverage: CatalogCoverage, problem?: string) {
+        this.published(attempt.siteId, entries, coverage); this.job!.items.find(item => item.siteId === attempt.siteId)!.state = problem ? 'review' : 'succeeded';
+        Object.assign(this.sites.get(attempt.siteId)!, { state: problem ? 'review' : 'succeeded', count: entries.length, coverage, error: problem }); this.job!.current = null;
     }
     async Result(attempt: IndexAttempt, error: string, review: boolean, retry: boolean) {
         const item = this.job!.items.find(item => item.siteId === attempt.siteId)!;
@@ -56,6 +56,24 @@ const wait = async (predicate: () => boolean) => { for (let i = 0; i < 2000; i++
 const manager = (ledger: Ledger, sources: CatalogSource[], mutex = lock(), timeoutMs = 2000) => new SiteIndexManager(ledger as unknown as SiteIndexRepository, () => sources, mutex, { timeoutMs, delayMs: 1, retryMs: 1 });
 
 describe('Sequential metadata-only site indexing', () => {
+    it('Should retain validated earlier 200 observations after a later 521 without claiming a complete index', async () => {
+        const ledger = new Ledger(); let observe: (count: number, status?: number) => void;
+        const native: CatalogSource = { id: 'partial', ObserveProgress(listener) { observe = listener; return () => {}; }, Catalog: async function* () {
+            observe(50, 200); yield { items: [{ id: 'valid', title: 'Valid manga' }], terminal: false, coverage: unknown, httpStatus: 200 };
+            observe(0, 521); throw new Error('HTTP 521');
+        } };
+        const run = manager(ledger, [native, source('next')]); await run.Start(); await wait(() => !run.Activity.Value.owned);
+        expect(ledger.published.mock.calls[0]).toMatchObject(['partial', [{ id: 'valid', title: 'Valid manga' }], { state: 'partial' }]);
+        expect(ledger.job?.items.map(item => item.state)).toEqual(['review', 'succeeded']);
+        expect(ledger.job?.items[0].attempts).toBe(1);
+    });
+    it('Should distinguish the internal FetchWindow timeout from the manager deadline without blind retries', async () => {
+        const ledger = new Ledger(), native = source('window');
+        native.Catalog = async function* () { throw Object.assign(new Error('Internal timeout'), { name: 'Exception<FetchProvider_FetchWindow_TimeoutError>' }); };
+        const run = manager(ledger, [native, source('next')]); await run.Start(); await wait(() => !run.Activity.Value.owned);
+        expect(ledger.sites.get('window')?.error).toBe('catalog-window-timeout');
+        expect(ledger.job?.items[0].attempts).toBe(1); expect(ledger.job?.items[1].state).toBe('succeeded');
+    });
     it('Should not publish links from a rate-limit response or retry it aggressively', async () => {
         const ledger = new Ledger(); let observe: (count: number, status?: number) => void;
         const native: CatalogSource = { id: 'blocked', ObserveProgress(listener) { observe = listener; return () => {}; }, Catalog: async function* () {

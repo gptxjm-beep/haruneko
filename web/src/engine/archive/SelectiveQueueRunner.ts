@@ -22,7 +22,7 @@ export class SelectiveQueueRunner {
     private optionalAbort = new AbortController();
     constructor(private readonly client: ArchiveClient, private readonly sites: () => readonly unknown[], private readonly downloads: DownloadManager,
         private readonly factory = (site: MangaPlugin, item: QueueManga, preferences: ArchivePreferences) => new ArchiveManager(site, downloads, client, item.sessionId!, preferences.policy,
-            { source: new SelectiveArchiveSource(site, item, item.scope) }),
+            { source: new SelectiveArchiveSource(site, item, item.scope, undefined, available => client.Request<void>({ operation: 'queue-observation', seq: item.seq, available })) }),
         private readonly details = { enabled: DetailsEnabled, download: DownloadMangaDetails }) {}
     public get Running(): boolean { return !!this.completion; }
     public async Start(preferences: ArchivePreferences, confirmed: boolean): Promise<void> {

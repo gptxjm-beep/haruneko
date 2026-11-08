@@ -152,6 +152,10 @@
     respondCatalog(true); await update();
     record('Explicit source aliases persist in the canonical catalog after a full observation refresh', (await browserStore.LoadPersistent(Store.MediaLists, catalogSite.Identifier)).find(row => row.id === detailsId).aliases.includes('ون بيس'));
     const { ExtractMangaDetails } = await import('/src/engine/archive/MangaDetails.ts');
+    const marketing = new DOMParser().parseFromString('<meta property="og:description" content="Visit our manga website"><div class="description-summary"><div class="summary__content">Actual story about the hero</div></div><div class="author-content">Author A</div>', 'text/html');
+    const story = ExtractMangaDetails(marketing);
+    record('Real story takes priority over site marketing while independent author fields survive', story.fields.Description === 'Actual story about the hero' && story.fields.Author === 'Author A');
+    record('Structured optional metadata excludes download progress and preserves cover diagnostics', detailSaves[0].metadata?.diagnostics.cover === 'invalid-image' && !JSON.stringify(detailSaves[0].metadata).includes('Registered chapters'));
     const related = new DOMParser().parseFromString('<script type="application/ld+json">[{"@type":"Book","url":"https://3asq.online/manga/catalog-0/","alternateName":"Real alias"},{"@type":"Book","url":"https://3asq.online/manga/other/","alternateName":"Unrelated alias"}]</script>', 'text/html');
     record('Metadata aliases from a different linked work are never assigned to the chosen manga', ExtractMangaDetails(related, new URL('https://3asq.online/manga/catalog-0/')).aliases.join(',') === 'Real alias');
     const { default: MangaSpark } = await import('/src/engine/websites/MangaSpark.ts');

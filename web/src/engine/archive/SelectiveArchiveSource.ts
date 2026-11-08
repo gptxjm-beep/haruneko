@@ -5,7 +5,7 @@ import type { MangaReference, QueueScope } from '../../../../app/electron/src/ar
 export class SelectiveArchiveSource implements ArchiveSource {
     public readonly executionOrderConfidence = 'user-confirmed' as const;
     constructor(public readonly site: MangaPlugin, private readonly reference: MangaReference, private readonly scope: QueueScope,
-        private readonly source: ArchiveSource = new EngineArchiveSource(site)) {}
+        private readonly source: ArchiveSource = new EngineArchiveSource(site), private readonly observed: (count: number) => Promise<void> = async () => {}) {}
     public async *Catalog(signal: AbortSignal) {
         signal.throwIfAborted();
         yield { items: [{ id: this.reference.mangaId, title: this.reference.title }], terminal: true as const,
@@ -13,11 +13,18 @@ export class SelectiveArchiveSource implements ArchiveSource {
     }
     public async Chapters(manga: Manga, signal: AbortSignal): Promise<ArchiveChapterManifest> {
         const manifest = await this.source.Chapters(manga, signal);
+        await this.observed(manifest.chapters.length);
         if (this.scope.order) {
-            const direction = manifest.order === 'unknown' ? this.scope.direction : manifest.order;
+            const direction = this.scope.direction ?? (manifest.order === 'unknown' ? undefined : manifest.order);
             if (this.scope.mode === 'range' && !direction) throw new Error('Review required: numeric range needs proven or explicitly confirmed chronology');
             if (this.scope.order !== 'source' && !direction) throw new Error('Review required: confirm source direction before chronological ordering');
             let chapters = [...manifest.chapters];
+            if (this.scope.sourceIds?.length) {
+                const positions = new Map(this.scope.sourceIds.map((id, position) => [id, position]));
+                const selected = this.scope.mode === 'selected' ? new Set(this.scope.ids) : undefined;
+                if (!selected && chapters.some(chapter => !positions.has(chapter.id))) throw new Error('Source list changed after preview; reload chapters before confirming');
+                chapters.sort((a, b) => (positions.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+            }
             if (this.scope.mode === 'range') {
                 const chronological = direction === 'descending' ? [...chapters].reverse() : chapters;
                 if (this.scope.to > chapters.length) throw new Error('Unsupported chapter range');
@@ -32,7 +39,7 @@ export class SelectiveArchiveSource implements ArchiveSource {
             }
             if (this.scope.order === 'first-last' && direction === 'descending' || this.scope.order === 'last-first' && direction === 'ascending') chapters.reverse();
             return { ...manifest, chapters, order: 'ascending', sequenceOnly: true,
-                orderEvidence: `Personal execution sequence ${this.scope.order}; ${direction ? `direction ${direction}${manifest.order === 'unknown' ? ' explicitly confirmed by user' : ' from connector evidence'}` : 'chronology unproven; source order explicitly accepted'}; ${manifest.orderEvidence}` };
+                orderEvidence: `Personal execution sequence ${this.scope.order}; ${direction ? `direction ${direction}${this.scope.direction ? ' from confirmed preview' : ' from connector evidence'}` : 'chronology unproven; source order explicitly accepted'}; ${manifest.orderEvidence}` };
         }
         if (manifest.order === 'unknown' || !manifest.orderEvidence.trim()) return { ...manifest, order: 'unknown' };
         if (this.scope.mode !== 'range') return manifest;

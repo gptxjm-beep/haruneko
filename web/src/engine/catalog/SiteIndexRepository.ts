@@ -132,16 +132,16 @@ export class SiteIndexRepository {
         }
         return result;
     }
-    public async Publish(attempt: IndexAttempt, entries: CatalogEntry[], coverage: CatalogCoverage): Promise<void> {
+    public async Publish(attempt: IndexAttempt, entries: CatalogEntry[], coverage: CatalogCoverage, problem?: string): Promise<void> {
         await Transaction([jobs, meta, Store.MediaLists, staging], async tx => {
             const job = await Job(tx, attempt.jobId), site = await Site(tx, attempt.siteId);
             if (job.state !== 'running' || job.current !== attempt.siteId || site.revision !== attempt.revision) throw new IndexConflictError('Manual refresh or job state changed; candidate not published');
             const old = await RequestValue<CatalogEntry[]>(tx.objectStore(Store.MediaLists).get(site.siteId));
             if (entries.length !== site.discovered) throw new IndexReviewError('Incomplete staging transaction; previous index retained');
             const merged = MergeCatalogObservation(old ?? [], entries, coverage);
-            job.items.find(item => item.siteId === site.siteId)!.state = 'succeeded'; job.current = null; job.updatedAt = Date.now();
+            job.items.find(item => item.siteId === site.siteId)!.state = problem ? 'review' : 'succeeded'; job.current = null; job.updatedAt = Date.now();
             tx.objectStore(Store.MediaLists).put(merged.entries, site.siteId);
-            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: merged.entries.length, lastSuccess: Date.now(), discovered: entries.length, state: 'succeeded', error: null, coverage: merged.coverage, comparison: merged.comparison });
+            tx.objectStore(meta).put({ ...site, revision: site.revision + 1, count: merged.entries.length, lastSuccess: Date.now(), discovered: entries.length, state: problem ? 'review' : 'succeeded', error: problem ?? null, coverage: merged.coverage, comparison: merged.comparison });
             tx.objectStore(jobs).put(job);
             tx.objectStore(staging).delete(IDBKeyRange.bound([attempt.id, 0], [attempt.id, Number.MAX_SAFE_INTEGER]));
         });

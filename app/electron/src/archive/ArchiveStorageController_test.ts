@@ -48,6 +48,14 @@ async function fixture() {
 }
 
 describe('Archive storage and isolated native writes', () => {
+    it('Should check optional metadata bytes on the archive disk rather than charging only the separate profile volume', async () => {
+        const f = await fixture();
+        f.space.set(f.root, 49n * GiB);
+        await expect(f.storage.Metadata(f.session, 2 * 1024 ** 2)).rejects.toMatchObject({ Fault: { code: 'low-space', location: 'archive' } });
+        f.space.set(f.root, 100n * GiB);
+        await expect(f.storage.Metadata(f.session, 2 * 1024 ** 2)).resolves.toBeUndefined();
+    });
+
     it('Should obtain actual asynchronous filesystem free and usable values', async () => {
         const f = await fixture();
         const sample = await ProbeArchiveVolume(f.root);

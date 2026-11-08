@@ -33,6 +33,13 @@ export class ArchiveStorageController {
         await this.Safety.Check(claims);
     }
 
+    /** Optional manga metadata is written on the final archive volume, independently of browser/profile disks. */
+    public async Metadata(sessionId: string, bytes: number): Promise<void> {
+        const session = this.repository.Session(sessionId), claims = this.Claims(String(session.root_id));
+        claims.at(-1)!.bytes = BigInt(Count(bytes, 'metadata bytes', 16 * 1024 ** 2));
+        await this.Safety.Check(claims);
+    }
+
     public async Image(attemptId: string, bytes: number, quota: ArchiveQuota, preflight = false): Promise<void> {
         Count(bytes, 'temporary bytes', Number.MAX_SAFE_INTEGER);
         if (!quota || !Number.isSafeInteger(quota.usage) || !Number.isSafeInteger(quota.quota) || quota.usage < 0 || quota.quota < quota.usage) throw new ArchiveStorageError({ code: 'unmeasurable', location: 'indexeddb-quota' });

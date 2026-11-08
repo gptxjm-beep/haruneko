@@ -16,6 +16,22 @@ export const enum Status {
 }
 
 export class DownloadTask {
+    private timings: Record<string, number> = {};
+    private async Bounded<T>(action: (signal: AbortSignal) => Promise<T>, milliseconds: number | undefined, label: string): Promise<T> {
+        const start = performance.now(), owned = new AbortController();
+        const signal = AbortSignal.any([this.cancellation.signal, owned.signal]);
+        let timer: ReturnType<typeof setTimeout>;
+        if (milliseconds) timer = setTimeout(() => owned.abort(new DOMException(`${label} timed out`, 'TimeoutError')), milliseconds);
+        try {
+            if (!milliseconds) return await action(signal);
+            return await new Promise<T>((resolve, reject) => {
+                const abort = () => { cleanup(); reject(signal.reason); }, cleanup = () => signal.removeEventListener('abort', abort);
+                signal.addEventListener('abort', abort, { once: true });
+                Promise.resolve().then(() => { signal.throwIfAborted(); return action(signal); }).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+                if (signal.aborted) abort();
+            });
+        } finally { clearTimeout(timer); this.timings[label] = (this.timings[label] ?? 0) + Math.round(performance.now() - start); }
+    }
     private WaitForArchivePage(milliseconds: number, signal: AbortSignal): Promise<void> {
         return new Promise((resolve, reject) => {
             const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason); };
@@ -129,10 +145,10 @@ export class DownloadTask {
         if (!this.started) this.Finish();
     }
 
-    private Record(stage: DownloadStage, error: unknown) {
+    private Record(stage: DownloadStage, error: unknown, page?: number) {
         const normalized = error instanceof Error ? error : new Error(String(error));
         this.errors.Push(normalized);
-        this.stageErrors.push({ stage, error: normalized });
+        this.stageErrors.push({ stage, error: normalized, page });
         this.liveErrors.Value = Object.freeze([...this.stageErrors]);
     }
 
@@ -163,6 +179,7 @@ export class DownloadTask {
         const outputState: DownloadResult['output']['state'] = written ? 'written' : this.files.length ? 'partial'
             : this.attemptedPaths.length || this.exportSucceeded ? 'unknown' : this.exportInvoked ? 'failed' : 'not-started';
         const result: DownloadResult = Object.freeze({
+            timings: Object.freeze({ ...this.timings }),
             taskId: this.TaskID, attemptId: this.attemptId,
             outcome: success ? this.cleanupState === 'failed' ? 'succeeded-with-warnings' : 'succeeded'
                 : this.cancellation.signal.aborted ? 'cancelled' : this.stageErrors.length ? 'failed' : 'unverified',
@@ -191,6 +208,7 @@ export class DownloadTask {
     }
 
     private ResetAttempt() {
+        this.timings = {};
         this.attemptId = crypto.randomUUID();
         this.cancellation = new AbortController();
         this.started = this.settled = false;
@@ -269,7 +287,8 @@ export class DownloadTask {
             stage = 'repository';
             if (this.Options.archiveTarget) await this.Options.archiveTarget.checkpoint('prepare', 0, 0);
             stage = 'prepare';
-            await this.Media.Update();
+            if (this.Options.archiveTarget) await this.Bounded(() => this.Media.Update(), 90000, 'prepare');
+            else await this.Media.Update();
             cancellator.signal.throwIfAborted();
             stage = 'fetch';
             this.fetchState = 'running';
@@ -284,7 +303,7 @@ export class DownloadTask {
                 try {
                     cancellator.signal.throwIfAborted();
                     if (this.Options.archiveTarget?.beforeFetch) await this.Options.archiveTarget.beforeFetch();
-                    const data = await item.Fetch(Priority.Low, cancellator.signal);
+                    const data = await this.Bounded(signal => item.Fetch(Priority.Low, signal), this.Options.archiveTarget ? this.Options.pageTimeoutMs ?? 60000 : undefined, 'fetch-and-validation');
                     cancellator.signal.throwIfAborted();
                     this.receivedPages++;
                     if (IsValidatedImage(data)) this.validatedPages++;
@@ -292,7 +311,7 @@ export class DownloadTask {
                     if (this.Options.archiveTarget?.beforeTemporaryWrite) await this.Options.archiveTarget.beforeTemporaryWrite(data.size);
                     if (this.Options.beforeTemporaryWrite) await this.Options.beforeTemporaryWrite(data.size);
                     cancellator.signal.throwIfAborted();
-                    const resource = await this.storageController.SaveTemporary(data);
+                    const resource = await this.Bounded(() => this.storageController.SaveTemporary(data), undefined, 'temporary-storage');
                     resourcemap.set(index, resource);
                     this.UpdateProgress(resourcemap.size);
                     itemStage = 'repository';
@@ -300,20 +319,20 @@ export class DownloadTask {
                 } catch(error) {
                     if (this.Options.archiveTarget && error instanceof DOMException && error.name === 'QuotaExceededError') error = new ArchiveCapacityError('Browser temporary storage quota was exhausted during writing', { code: 'quota-exceeded', location: 'indexeddb' });
                     if (error instanceof ImageValidationError) this.validationFailed = true;
-                    this.Record(error instanceof ImageValidationError ? 'validation' : error instanceof ArchivePersistenceError ? 'repository' : itemStage, error);
+                    this.Record(error instanceof ImageValidationError ? 'validation' : error instanceof ArchivePersistenceError ? 'repository' : itemStage, error, index + 1);
                     // TODO: Abort all other pending downloads or keep running?
                     throw error;
                 }
             };
-            if (this.Options.pageDelayMs === undefined && !this.Options.archiveTarget?.beforeFetch) {
+            if (this.Options.pageDelayMs === undefined && !this.Options.archiveTarget) {
                 await Promise.allSettled(this.Media.Entries.Value.map(fetch));
             } else {
                 // Do not enqueue every page in a second task pool: its throttle timer is not abortable.
                 for (let index = 0; index < this.Media.Entries.Value.length; index++) {
                     cancellator.signal.throwIfAborted();
-                    if (index && this.Options.pageDelayMs) await this.WaitForArchivePage(this.Options.pageDelayMs, cancellator.signal);
+                    if (index && this.Options.pageDelayMs) await this.Bounded(() => this.WaitForArchivePage(this.Options.pageDelayMs, cancellator.signal), undefined, 'intentional-delay');
                     try { await fetch(this.Media.Entries.Value[index], index); }
-                    catch(error) { if (error instanceof ArchiveCapacityError) break; /* fetch already records the stage and cause. */ }
+                    catch { break; /* Required page failed: do not hammer every remaining page of an incomplete chapter. */ }
                 }
             }
             this.fetchState = cancellator.signal.aborted ? 'cancelled'
@@ -346,7 +365,7 @@ export class DownloadTask {
                     },
                     verify: () => this.VerifyOutput(),
                 };
-                await this.Media.Store(resourcemap, { ...this.Options, context });
+                await this.Bounded(() => this.Media.Store(resourcemap, { ...this.Options, context }), undefined, 'export');
                 this.exportSucceeded = true;
             }
         } catch(error) {

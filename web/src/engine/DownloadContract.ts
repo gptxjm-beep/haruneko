@@ -15,6 +15,7 @@ export interface DownloadOptions {
     readonly archiveTarget?: NativeArchiveTarget;
     /** Bounded archive page fetching; absent for existing manual callers. */
     readonly pageDelayMs?: number;
+    readonly pageTimeoutMs?: number;
     readonly beforeTemporaryWrite?: (bytes: number) => Promise<void>;
 }
 
@@ -40,6 +41,7 @@ export interface NativeArchiveTarget {
 export type DownloadStage = 'prepare' | 'fetch' | 'validation' | 'temporary-storage' | 'export' | 'verification' | 'cleanup' | 'internal' | 'repository';
 
 export interface DownloadError {
+    readonly page?: number;
     readonly stage: DownloadStage;
     readonly error: Error;
 }
@@ -70,6 +72,7 @@ export interface StoreOptions extends DownloadOptions {
 }
 
 export interface DownloadResult {
+    readonly timings?: Readonly<Record<string, number>>;
     readonly taskId: string;
     readonly attemptId: string;
     readonly outcome: 'succeeded' | 'succeeded-with-warnings' | 'failed' | 'cancelled' | 'unverified';

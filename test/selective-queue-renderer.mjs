@@ -24,8 +24,8 @@
     class Fixture extends MangaScraper {
         async Initialize() {}
         async FetchMangas() { catalogs++; throw new Error('Queue must not enumerate whole sites'); }
-        GetArchiveChapterOrder(manga) { return manga.Identifier === 'unknown' ? { order: 'unknown', evidence: 'Fixture has no proven order' } : { order: 'descending', evidence: 'Isolated fixture explicitly emits newest then oldest after decorators' }; }
-        async FetchChapters(manga) { return [new Chapter(this, manga, 'new', 'Chapter New'), new Chapter(this, manga, 'old', 'Chapter Old')]; }
+        GetArchiveChapterOrder(manga) { return ['unknown', 'preview15'].includes(manga.Identifier) ? { order: 'unknown', evidence: 'Fixture has no proven order' } : { order: 'descending', evidence: 'Isolated fixture explicitly emits newest then oldest after decorators' }; }
+        async FetchChapters(manga) { if (manga.Identifier === 'preview15') return Array.from({ length: 15 }, (_, n) => new Chapter(this, manga, String(15 - n), `Chapter ${15 - n}`)); return [new Chapter(this, manga, 'new', 'Chapter New'), new Chapter(this, manga, 'old', 'Chapter Old')]; }
         async FetchPages(chapter) { return [new Page(this, chapter, new URL('https://fixture.invalid/page'))]; }
         async FetchImage(page, _priority, signal) { images++; order.push([page.Parent.Parent.Identifier, page.Parent.Identifier]); await gate; signal.throwIfAborted(); return page.Parent.Parent.Identifier === 'bad' ? new Blob(['<html>Error</html>'], { type: 'image/png' }) : image; }
     }
@@ -87,6 +87,13 @@
     bleachCard().querySelector('.chapter-list input').click();
     await wait(async () => (await queue.List()).find(row => row.mangaId === 'bleach').scope.mode === 'selected');
     record('Individual chapter selection is durable by ID and chronological display follows the same policy', (await queue.List()).find(row => row.mangaId === 'bleach').scope.ids.join(',') === 'new');
+    await click('Clear Selection');
+    await wait(async () => (await queue.List()).find(row => row.mangaId === 'bleach').scope.ids?.length === 0);
+    await wait(() => [...bleachCard().querySelectorAll('.chapter-list input')].every(input => !input.checked));
+    const chaptersToggle = () => [...bleachCard().querySelectorAll('button')].find(button => button.textContent.startsWith('Chapters ('));
+    chaptersToggle().click(); await tick(); chaptersToggle().click();
+    await wait(() => bleachCard().querySelectorAll('.chapter-list input').length === 2);
+    record('Clear Selection saves zero IDs across closing and reopening the real Svelte panel without IPC clone errors', [...bleachCard().querySelectorAll('.chapter-list input')].every(input => !input.checked));
     await click('Select All');
     await wait(async () => (await queue.List()).find(row => row.mangaId === 'bleach').scope.mode === 'all');
     await wait(() => [...bleachCard().querySelectorAll('.chapter-list input')].every(input => input.checked));
@@ -130,17 +137,61 @@
     record('HTML images cannot produce a Completed queue item', rows.find(row => row.mangaId === 'bad').state === 'Review');
     record('The cumulative five-manga limit leaves extra queued entries intact without hidden session resets', summary.mangasUsed === 5 && summary.chaptersStarted <= 20 && rows.find(row => row.mangaId === 'extra').state === 'Queued');
     const detailsItem = rows.find(row => row.state === 'Completed');
-    const detailResult = await client.Request({ operation: 'queue-details-save', seq: detailsItem.seq, text: 'Known optional details', cover: new Uint8Array(await image.arrayBuffer()), extension: 'png', partial: false });
+    const detailResult = await client.Request({ operation: 'queue-details-save', seq: detailsItem.seq, text: 'Known optional details', cover: new Uint8Array(await image.arrayBuffer()), extension: 'png', partial: false, metadata: { schema: 1, title: 'قصة محلية', sourceName: 'Test', fields: { Description: 'Known local story', Author: 'Known author' } } });
+    const offline = await ipcRenderer.invoke('QueueTest::OfflineDetails');
+    record('Native generated HTML opens offline with the saved cover and story, without external resource requests', offline.title === 'قصة محلية' && offline.text.includes('Known local story') && offline.width === 2 && offline.requests === 0);
     const detailsHealth = await client.Request({ operation: 'queue-details-inspect', seq: detailsItem.seq });
     record('Real native details publication saves a separate valid cover receipt without changing chapter completion or cumulative budget', detailResult === 'Saved' && detailsHealth.coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed' && (await client.Request({ operation: 'queue-summary' })).chaptersStarted === summary.chaptersStarted);
     await client.Request({ operation: 'queue-details-save', seq: detailsItem.seq, text: 'Known optional details', cover: new TextEncoder().encode('<html>not an image</html>'), extension: 'png', partial: false });
     record('Native optional-cover validation rejects HTML while preserving the healthy cover and chapter receipts', (await client.Request({ operation: 'queue-details-inspect', seq: detailsItem.seq })).coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed');
     const completed = rows[0], before = images; await queue.Edit(completed.seq, 'remove'); await queue.Add(refs[2]);
+    const fresh = (await queue.List()).find(row => row.mangaId === 'berserk');
+    record('Readding resets the selection while preserving historical receipts and budget', fresh.sessionId === null && fresh.scope.mode === 'all' && fresh.historyCount === 1);
+    await queue.Edit(fresh.seq, 'up', { mode: 'selected', ids: ['old'], order: 'first-last' });
     await runner.Start(summary.preferences, true);
-    record('Removing and readding a completed identity reuses its task and never downloads its healthy files again', images === before && (await queue.List()).find(row => row.mangaId === 'berserk').state === 'Completed');
+    const readded = (await queue.List()).find(row => row.mangaId === 'berserk');
+    record('Removing and readding starts a fresh linked manifest and reuses physically healthy files without refetching', images === before && readded.state === 'Completed' && readded.sessionId !== completed.sessionId && readded.historyCount === 2);
+    const report = await client.Request({ operation: 'queue-report', seq: readded.seq });
+    record('Download Report retains both attempt histories and verified physical-file counts', report.sessions.length === 2 && report.sessions.every(session => session.counts.completed === 1 && session.history.length));
+    const completedCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'));
+    await wait(() => [...completedCard().querySelectorAll('button')].some(button => button.textContent.trim() === 'Download Report'));
+    [...completedCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Download Report').click();
+    await wait(() => completedCard().querySelector('[data-testid="download-report"]')?.textContent.includes('verified requested chapters'));
+    record('The real Download Report panel opens current and historical verified chapter results without another source request', completedCard().querySelector('[data-testid="download-report"]').textContent.includes('Recorded history'));
+    record('Native report export uses the save dialog and refuses to replace an existing exported file', await client.Request({ operation: 'queue-export-report', seq: readded.seq }));
+    let exportProtected = false; try { await client.Request({ operation: 'queue-export-report', seq: readded.seq }); } catch { exportProtected = true; }
+    record('Repeated report export preserves existing files', exportProtected);
+    await ipcRenderer.invoke('QueueTest::RemoveIsolatedChapter');
+    const diskAudit = await queue.Audit(readded.seq);
+    record('An externally removed isolated chapter loses its Verified badge while immutable receipts and historical reports remain', diskAudit.some(row => row.localState === 'missing') && (await queue.List()).find(row => row.seq === readded.seq).state === 'Review' && (await queue.List()).find(row => row.seq === readded.seq).progress.verified === 0 && (await client.Request({ operation: 'queue-report', seq: readded.seq })).sessions.some(session => session.history.length));
     await runner.Cancel(); record('Cancel preserves the original manual download manager and does not delete completed references', originalDownloads.Queue.Value.length === 0 && (await queue.List()).some(row => row.state === 'Completed'));
     record('Selective setup and execution do not modify the existing archiving defaults', JSON.stringify((await client.Request({ operation: 'ui-preferences' })).preferences) === JSON.stringify(defaults.preferences));
-    globalThis.selectiveQueueFixture = { selected: 2, queued: rows.length, chaptersStarted: summary.chaptersStarted };
+    await queue.Add({ siteId: a.Identifier, siteName: a.Title, mangaId: 'preview15', title: 'Fifteen chapter preview' });
+    await wait(() => [...document.querySelectorAll('[data-testid="personal-entry"]')].some(card => card.textContent.includes('Fifteen chapter preview')));
+    const fifteenCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Fifteen chapter preview'));
+    const fifteenOrder = () => fifteenCard().querySelector('.chapter-policy > label select');
+    await wait(() => !fifteenOrder().disabled);
+    fifteenOrder().value = 'first-last'; fifteenOrder().dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => fifteenCard().textContent.includes('Order not applied yet'));
+    record('Unknown source direction requires visible preview confirmation rather than a falsely saved chronological policy', (await queue.List()).find(row => row.mangaId === 'preview15').scope.order === 'source');
+    const direction = fifteenCard().querySelector('.chapter-panel select'); direction.value = 'descending'; direction.dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => fifteenCard().querySelector('.chapter-list span')?.textContent === 'Chapter 1');
+    await wait(() => !fifteenOrder().disabled);
+    fifteenOrder().value = 'last-first'; fifteenOrder().dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => fifteenCard().querySelector('.chapter-list span')?.textContent === 'Chapter 15');
+    await wait(() => !fifteenOrder().disabled);
+    fifteenOrder().value = 'first-last'; fifteenOrder().dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(() => fifteenCard().querySelector('.chapter-list span')?.textContent === 'Chapter 1');
+    const clear = [...fifteenCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Clear Selection'); clear.click();
+    await wait(() => [...fifteenCard().querySelectorAll('.chapter-list input')].every(input => !input.checked));
+    for (const id of ['1','2','3']) {
+        const input = [...fifteenCard().querySelectorAll('.chapter-list label')].find(label => label.querySelector('span').textContent === `Chapter ${id}`).querySelector('input');
+        await wait(() => !input.disabled); input.click();
+        await wait(async () => (await queue.List()).find(row => row.mangaId === 'preview15').scope.ids?.includes(id));
+    }
+    const row15 = (await queue.List()).find(row => row.mangaId === 'preview15');
+    record('Real Svelte first-last and last-first previews pin all fifteen original identities, then save 1,2,3 without clone errors', row15.scope.direction === 'descending' && row15.scope.sourceIds[0] === '15' && row15.scope.ids.join(',') === '1,2,3');
+    globalThis.selectiveQueueFixture = { selected: 2, queued: (await queue.List()).length, chaptersStarted: summary.chaptersStarted, chapterSelection: row15.seq };
     await unmount(app); target.remove(); HakuNeko.PluginController.WebsitePlugins = originalSites; HakuNeko.DownloadManager = originalDownloads; UI.hubSection = 'sites';
     searchController.Query(originalPreference, 0); searchController.SetActive(originalPreference.active); await searchController.Flush();
     return checks;

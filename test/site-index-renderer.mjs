@@ -28,6 +28,9 @@
     const summary = async id => (await repository.Snapshot()).sites.find(site => site.siteId === id);
     await run([source('index-good', entries('a', 'b'))]);
     record('Catalog publication atomically updates the existing canonical MediaLists and unknown coverage metadata', (await saved('index-good')).length === 2 && (await summary('index-good')).coverage.state === 'unknown' && !!(await summary('index-good')).lastSuccess);
+    await SaveManualMediaList('index-http-partial', entries('old'));
+    await run([{ id: 'index-http-partial', Catalog: async function* () { yield { items: entries('new'), terminal: false, coverage: unknown, httpStatus: 200 }; throw new Error('HTTP 521'); } }]);
+    record('A later 521 retains validated prior page observations and the previous canonical index as Review and Partial in real IndexedDB', (await saved('index-http-partial')).map(row => row.id).sort().join(',') === 'new,old' && (await summary('index-http-partial')).state === 'review' && (await summary('index-http-partial')).coverage.state === 'partial');
     const prior = await summary('index-good');
     await run([source('index-good', entries('a'))]);
     record('A shrinking uncertain catalog preserves the old list and last-success receipt', (await saved('index-good')).length === 2 && (await summary('index-good')).lastSuccess >= prior.lastSuccess && (await summary('index-good')).coverage.state === 'partial');

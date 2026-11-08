@@ -305,7 +305,7 @@ export async function FetchMangasMultiPageCSS<E extends HTMLElement>(this: Manga
         await reducer;
         reducer = throttle > 0 ? Delay(throttle) : Promise.resolve();
         const mangas = await FetchMangasSinglePageCSS.call(this, provider, uri.href, query, extract);
-        provider.ReportCatalogProgress(mangas.length);
+        provider.ReportCatalogProgress(mangas.length, mangas);
         if (generate.isExhaustive || mangaList.isLastItemDifferentFromNonEmpty(mangas)) {
             mangaList.push(...mangas); // TODO: Broadcast event that mangalist for provider has been updated?
         } else {

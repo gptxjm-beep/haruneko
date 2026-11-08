@@ -309,6 +309,7 @@ export class ArchiveRepository {
         for (const key of result.cleanupKeys) Text(key, 'temporary key', 256);
         if (!['not-needed', 'completed', 'failed'].includes(result.cleanupState)) throw new Error('Invalid cleanup state');
         const snapshot = {
+            timings: Object.fromEntries(Object.entries(result.timings ?? {}).slice(0, 12).map(([key, value]) => [Text(key, 'timing stage', 64), Count(value, 'elapsed milliseconds', 86400000)])),
             outcome: result.outcome, receivedPages: result.receivedPages, validatedPages: result.validatedPages,
             outputState: Text(result.outputState, 'output state', 32), verification: Text(result.verification, 'verification state', 32), cleanupState: result.cleanupState,
         };

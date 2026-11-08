@@ -6,7 +6,7 @@ export interface CatalogSource {
     id: string;
     name?: string;
     ObserveProgress?(listener: (count: number, status?: number) => void): () => void;
-    Catalog(signal: AbortSignal): AsyncIterable<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage }>;
+    Catalog(signal: AbortSignal): AsyncIterable<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage; httpStatus?: number }>;
     Published?(): void;
 }
 export interface CatalogLock {
@@ -31,6 +31,7 @@ function Failure(error: unknown): { code: string; review: boolean; retry: boolea
     if (error instanceof IndexReviewError) return { code: 'catalog-needs-review: previous index retained', review: true, retry: false };
     if (error instanceof IndexConflictError) return { code: 'catalog-conflict: a newer manual update or job state was preserved', review: true, retry: false };
     const value = error as Error;
+    if (/FetchWindow.*Timeout/i.test(value?.name ?? '')) return { code: 'catalog-window-timeout', review: false, retry: false };
     if (value?.name === 'TimeoutError') return { code: 'catalog-timeout', review: false, retry: true };
     if (/403|401|429|captcha|access.denied|not.implemented|forbidden|cloudflarechallenge|vercelchallenge/i.test(`${value?.name} ${value?.message}`)) return { code: 'catalog-access-or-capability-unavailable', review: true, retry: false };
     return { code: 'catalog-fetch-or-storage-failed', review: false, retry: true };
@@ -154,7 +155,16 @@ export class SiteIndexManager {
                 this.Log({ event: 'attempt-failure', siteId: item.siteId, elapsedMs: Date.now() - started, stage: this.phase, code: failure.code,
                     errorType: /^[A-Za-z0-9_<>:.-]{1,160}$/.test(name) ? name : 'Error', httpStatus: lastHTTP ?? (http ? Number(http) : /Forbidden/.test(name) ? 403 : null),
                     diagnostic: failure.code === 'catalog-timeout' ? 'Connector made no timely progress or exceeded the bounded maximum duration' : failure.code });
-                await this.Repository.Result(attempt, failure.code, failure.review, failure.retry);
+                let retained = false;
+                if (!(error instanceof IndexStorageError) && !(error instanceof IndexConflictError) && !(error instanceof IndexReviewError) && ![401, 403, 429].includes(lastHTTP ?? 0)) {
+                    const candidate = await this.Repository.Candidate(attempt);
+                    if (candidate.length) {
+                        await this.Repository.Publish(attempt, candidate, { state: 'partial', evidence: `Source stopped: ${failure.code}; only validated observations retained` }, failure.code);
+                        retained = true; source?.Published?.();
+                        this.Log({ event: 'partial-retained', siteId: item.siteId, count: candidate.length, httpStatus: lastHTTP, code: failure.code });
+                    }
+                }
+                if (!retained) await this.Repository.Result(attempt, failure.code, failure.review, failure.retry);
                 if (!this.settled) {
                     // Wait conservatively without blocking UI controls. Continue the requested batch only
                     // once the old transport settles; a deliberate user stop must never auto-resume.
@@ -186,13 +196,13 @@ export class SiteIndexManager {
             this.phase = 'connector-fetch';
             const next = Promise.resolve().then(() => { signal.throwIfAborted(); return iterator.next(); });
             this.pending = next.then(() => { this.settled = true; }, () => { this.settled = true; });
-            const result = await AwaitSignal(next, signal) as IteratorResult<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage }>;
+            const result = await AwaitSignal(next, signal) as IteratorResult<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage; httpStatus?: number }>;
             if (result.done) break;
             const value = result.value;
             if (!value || !Array.isArray(value.items) || !value.coverage || !['complete', 'partial', 'unknown', 'unsupported'].includes(value.coverage.state)) throw new IndexReviewError('Invalid catalog evidence');
-            const status = httpStatus();
+            const status = value.httpStatus ?? httpStatus();
             // A terminal missing pagination page can retain earlier observations, never prove completeness.
-            if (status !== null && status >= 400 && !(status === 404 && value.items.length > 0)) throw new Error(`HTTP ${status} catalog response`);
+            if (status !== null && status >= 400 && !(status === 404 && (value.items.length > 0 || offset > 0))) throw new Error(`HTTP ${status} catalog response`);
             partial ||= status === 404;
             this.phase = 'validation';
             const unique: CatalogEntry[] = [];

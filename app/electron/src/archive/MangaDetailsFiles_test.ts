@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ArchiveRepository } from './ArchiveRepository';
 import { DefaultArchivePreferences } from './ArchiveUIContract';
+import { RenderMangaMetadata } from './MangaMetadata';
 import { MangaDetailsFiles } from './MangaDetailsFiles';
 import type { ArchiveStorageController } from './ArchiveStorageController';
 describe('Optional manga details files', () => {
@@ -16,7 +17,7 @@ describe('Optional manga details files', () => {
             repository.Queue.Execute({ operation: 'queue-add', reference: { siteId: 'test', siteName: 'Test', mangaId: '/manga/id/', title: 'Manga' } });
             repository.Queue.Execute({ operation: 'queue-open', preferences: { ...DefaultArchivePreferences, rootId: grant.rootId }, confirmed: true });
             const row = repository.Queue.Execute({ operation: 'queue-next' });
-            const files = new MangaDetailsFiles(repository, { CheckSession: async () => {} } as unknown as ArchiveStorageController);
+            const files = new MangaDetailsFiles(repository, { CheckSession: async () => {}, Metadata: async () => {} } as unknown as ArchiveStorageController);
             expect(await files.Save(row.seq, { text: 'Known title', partial: true })).toBe('Partial');
             const text = path.join(root, 'Test', 'Manga', '00 - Manga Details', 'details.txt');
             expect(await readFile(text, 'utf8')).toBe('Known title');
@@ -25,6 +26,16 @@ describe('Optional manga details files', () => {
             expect(repository.Queue.Execute({ operation: 'queue-list' })[0].detailsState).toBe('Partial');
             expect(repository.Queue.Budget()).toEqual({ mangasUsed: 0, chaptersStarted: 0 });
             expect(repository.Work.Snapshot(row.sessionId).state).toBe('paused');
+            const metadata = { schema: 1 as const, title: 'قصة <script>alert(1)</script>', sourceName: 'Test', fields: { Description: 'Real story & details' } };
+            await files.Save(row.seq, { metadata, partial: false });
+            const folder = path.dirname(text), json = JSON.parse(await readFile(path.join(folder, 'metadata.json'), 'utf8'));
+            expect(json.title).toBe(metadata.title);
+            const html = await readFile(path.join(folder, 'index.html'), 'utf8');
+            expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain('<script>');
+            expect(html).toBe(RenderMangaMetadata(json));
+            expect(html).toContain("default-src 'none'"); expect(html).not.toContain('Registered');
+            await files.Save(row.seq, { metadata: { ...metadata, fields: { Description: 'Must not overwrite' } }, partial: false });
+            expect(JSON.parse(await readFile(path.join(folder, 'metadata.json'), 'utf8')).fields.Description).toBe('Real story & details');
         } finally { repository.Close(); await rm(base, { recursive: true, force: true }); }
     });
 });

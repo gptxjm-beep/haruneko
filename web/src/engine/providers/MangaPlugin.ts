@@ -105,12 +105,18 @@ export class MangaPlugin extends MediaContainer<Manga> {
     private catalogFlight?: { pending: Promise<Manga[]>; controller: AbortController; consumers: Set<object> };
     public get CatalogSignal(): AbortSignal | undefined { return this.catalogFlight?.controller.signal; }
     private readonly catalogObservers = new Set<(count: number, status?: number) => void>();
+    private readonly catalogEntries = new Set<(entries: readonly Manga[], status?: number) => void>();
+    private catalogHTTP?: number;
+    public ObserveCatalogEntries(listener: (entries: readonly Manga[], status?: number) => void): () => void { this.catalogEntries.add(listener); return () => this.catalogEntries.delete(listener); }
     public ObserveCatalogProgress(listener: (count: number, status?: number) => void): () => void { this.catalogObservers.add(listener); return () => this.catalogObservers.delete(listener); }
-    public TraceCatalog(request: Request): void { TraceCatalogRequest(request, status => { for (const listener of this.catalogObservers) listener(0, status); }); }
-    public ReportCatalogProgress(count: number): void { if (count > 0) for (const listener of this.catalogObservers) listener(count); }
+    public TraceCatalog(request: Request): void { TraceCatalogRequest(request, status => { this.catalogHTTP = status; for (const listener of this.catalogObservers) listener(0, status); }); }
+    public ReportCatalogProgress(count: number, entries?: readonly Manga[]): void {
+        if (count > 0) { for (const listener of this.catalogObservers) listener(count); if (entries) for (const listener of this.catalogEntries) listener(entries, this.catalogHTTP); }
+    }
     private FetchCatalog(signal?: AbortSignal): Promise<Manga[]> {
         signal?.throwIfAborted();
         if (!this.catalogFlight) {
+            this.catalogHTTP = undefined;
             const pending = Promise.resolve().then(() => this.scraper.FetchMangas(this));
             const flight = this.catalogFlight = { pending, controller: new AbortController(), consumers: new Set<object>() };
             void pending.finally(() => { if (this.catalogFlight === flight) this.catalogFlight = undefined; }).catch(() => {});

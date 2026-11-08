@@ -3,6 +3,7 @@ import { Tags } from '../Tags';
 import type { ArchiveEvidence, ArchiveWorkChapter } from '../../../../app/electron/src/archive/ArchiveCoordinatorProtocol';
 
 export interface ArchiveCatalogPage {
+    httpStatus?: number;
     items: readonly { id: string; title: string }[];
     terminal: boolean;
     coverage: ArchiveEvidence;
@@ -40,14 +41,32 @@ export class EngineArchiveSource implements ArchiveSource {
 
     public async *Catalog(signal: AbortSignal): AsyncIterable<ArchiveCatalogPage> {
         signal.throwIfAborted();
-        const entries = await this.site.FetchArchiveEntries(signal);
-        signal.throwIfAborted();
-        if (!entries.length) yield { items: [], terminal: true, coverage: { state: 'unknown', evidence: 'Empty connector index requires review' } };
-        for (let offset = 0; offset < entries.length; offset += 50) {
+        const pages: { entries: readonly Manga[]; status?: number }[] = [];
+        let wake = () => {}, finished = false, failure: unknown, observed = false;
+        const owned = new AbortController();
+        const combined = AbortSignal.any([signal, owned.signal]);
+        const unsubscribe = this.site.ObserveCatalogEntries?.((entries, status) => { observed = true; pages.push({ entries, status }); wake(); });
+        let entries: readonly Manga[] = [];
+        const fetching = this.site.FetchArchiveEntries(combined).then(value => { entries = value; }, error => { failure = error; }).finally(() => { finished = true; wake(); });
+        try {
+            while (!finished || pages.length) {
+                if (!pages.length) { await new Promise<void>(resolve => { wake = resolve; if (finished || pages.length) resolve(); }); continue; }
+                const page = pages.shift()!;
+                for (let offset = 0; offset < page.entries.length; offset += 50) {
+                    combined.throwIfAborted();
+                    yield { items: page.entries.slice(offset, offset + 50).map(manga => ({ id: manga.Identifier, title: manga.Title })), httpStatus: page.status, terminal: false, coverage: { state: 'unknown', evidence: 'Observed connector page; source completeness unproven' } };
+                }
+            }
+            if (failure) throw failure;
+            if (observed) { yield { items: [], terminal: true, coverage: { state: 'unknown', evidence: 'Connector enumeration settled; completeness unproven' } }; return; }
             signal.throwIfAborted();
-            yield { items: entries.slice(offset, offset + 50).map(manga => ({ id: manga.Identifier, title: manga.Title })), terminal: offset + 50 >= entries.length,
-                coverage: { state: 'unknown', evidence: 'FetchMangas returns an array without a complete-index proof' } };
-        }
+            if (!entries.length) yield { items: [], terminal: true, coverage: { state: 'unknown', evidence: 'Empty connector index requires review' } };
+            for (let offset = 0; offset < entries.length; offset += 50) {
+                signal.throwIfAborted();
+                yield { items: entries.slice(offset, offset + 50).map(manga => ({ id: manga.Identifier, title: manga.Title })), terminal: offset + 50 >= entries.length,
+                    coverage: { state: 'unknown', evidence: 'FetchMangas returns an array without a complete-index proof' } };
+            }
+        } finally { unsubscribe?.(); owned.abort(); await fetching; }
     }
 
     public async Chapters(manga: Manga, signal: AbortSignal): Promise<ArchiveChapterManifest> {

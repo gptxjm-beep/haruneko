@@ -1,0 +1,9 @@
+export interface MangaMetadata {
+    schema: 1; title: string; sourceName: string; sourceURL?: string; fields: Record<string, string>; diagnostics?: Record<string, string>; cover?: string;
+}
+const Escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
+/** Pure renderer: metadata.json is the editable input; no scripts or network resources. */
+export function RenderMangaMetadata(metadata: MangaMetadata): string {
+    const cover = /^cover\.(png|jpg|webp|gif|bmp|avif)$/.test(metadata.cover ?? '') ? `<img src="${metadata.cover}" alt="Manga cover">` : '';
+    return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file: data:; style-src 'unsafe-inline'"><title>${Escape(metadata.title)}</title><style>body{font:16px/1.6 system-ui;background:#15171c;color:#eee;margin:0;padding:2rem}main{max-width:900px;margin:auto}header{display:flex;gap:1.5rem;align-items:start}img{max-width:180px;max-height:260px;object-fit:contain;border-radius:8px}h1{line-height:1.2}section{padding:1rem;background:#22252c;border-radius:8px;margin:1rem 0}p{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#bbc1cd}@media(max-width:600px){header{display:block}}</style><main><header>${cover}<div><h1 dir="auto">${Escape(metadata.title)}</h1><p dir="auto">${Escape(metadata.sourceName)}</p><small>${Escape(metadata.sourceURL)}</small></div></header>${Object.entries(metadata.fields).map(([key, value]) => `<section><h2>${Escape(key)}</h2><p dir="auto">${Escape(value)}</p></section>`).join('')}<details><summary>Source diagnostics</summary><pre>${Escape(JSON.stringify(metadata.diagnostics ?? {}, null, 2))}</pre></details></main></html>`;
+}

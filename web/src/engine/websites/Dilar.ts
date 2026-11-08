@@ -329,7 +329,7 @@ export default class extends DecoratableMangaScraper {
                 await Delay(500);
                 const { series } = await this.FetchAPI<APIMangas>(`./series/?page=${page}`);
                 const mangas = !series ? [] : series.map(({ id, title }) => new Manga(this, provider, id, title));
-                provider.ReportCatalogProgress(mangas.length);
+                provider.ReportCatalogProgress(mangas.length, mangas);
                 mangas.length > 0 ? yield* mangas : run = false;
             }
         }.call(this));

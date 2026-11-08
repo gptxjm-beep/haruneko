@@ -34,7 +34,8 @@ export async function EnqueueArchiveChapter(manager: DownloadManager, client: Ar
             await client.Request({ operation: 'finish-attempt', attemptId, result: {
                 outcome: result.outcome, receivedPages: result.fetch.receivedPages, validatedPages: result.inputValidation.validatedPages,
                 outputState: result.output.state, verification: result.verification.state, cleanupState: result.cleanup.state,
-                cleanupKeys: [...result.cleanup.remainingKeys], errors: result.errors.map(error => ({ stage: error.stage, message: error.error.message || 'Unknown error' })),
+                timings: result.timings,
+                cleanupKeys: [...result.cleanup.remainingKeys], errors: result.errors.map(error => ({ stage: error.stage, message: `${error.page ? `Page ${error.page}: ` : ''}${error.error.message || 'Unknown error'}` })),
             } });
             await client.Request({ operation: 'recover-chapter', sessionId, chapterKey });
             return result;

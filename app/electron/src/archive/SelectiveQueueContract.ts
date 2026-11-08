@@ -13,10 +13,13 @@ export type QueueState = 'Queued' | 'Preparing' | 'Downloading' | 'Paused' | 'Re
 export interface SelectedManga extends MangaReference { seq: number; }
 export interface QueueMembership { selected: boolean; queued: boolean; }
 export interface QueueManga extends SelectedManga {
+    enqueueVersion?: number;
+    historyCount?: number;
+    existing?: { healthy: number; missing: number; review: number; at: number };
     detailsState?: string;
     state: QueueState; reason: string; sessionId: string | null; scope: QueueScope;
     inCurrentRun?: boolean;
-    progress?: { registered: number; verified: number; bytes: number; chapter: string | null; storage: string | null };
+    progress?: { registered: number; verified: number; bytes: number; chapter: string | null; storage: string | null; failed?: number; review?: number; pending?: number; selected?: number; available?: number };
 }
 export interface QueueSnapshot { selected: number; queued: number; state: string; reason: string; mangasUsed: number; chaptersStarted: number; preferences: ArchivePreferences | null; rootLabel: string; batchId: string | null; waitingNextRun: number; }
 export type SelectiveQueueCommand =
@@ -25,6 +28,9 @@ export type SelectiveQueueCommand =
     | { operation: 'queue-list'; offset?: number }
     | { operation: 'queue-chapters'; seq: number; offset?: number }
     | { operation: 'queue-details-unavailable'; seq: number }
+    | { operation: 'queue-supplement'; seq: number; scope: QueueScope; confirmed: boolean }
+    | { operation: 'queue-report'; seq: number }
+    | { operation: 'queue-observation'; seq: number; available: number }
     | { operation: 'queue-selected'; references: MangaReference[] }
     | { operation: 'queue-select'; reference: MangaReference; selected: boolean }
     | { operation: 'queue-add'; reference?: MangaReference }

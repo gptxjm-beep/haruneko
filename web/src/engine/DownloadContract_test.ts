@@ -43,6 +43,22 @@ const measuredWindowsBudget = process.platform === 'win32' && process.env.CI ? N
 const batchTimeout = Number.isSafeInteger(measuredWindowsBudget) && measuredWindowsBudget >= 5000 && measuredWindowsBudget <= 15000 ? measuredWindowsBudget : 5000;
 
 describe('Download attempt contract', () => {
+    it('Should bound a stuck archive page, record its index, and avoid fetching the rest of the broken chapter', async () => {
+        vi.useFakeTimers();
+        try {
+            const f = fixture(); let signal: AbortSignal;
+            f.item.Fetch.mockImplementation((_priority: unknown, stop?: AbortSignal) => { signal = stop; return new Promise(() => {}); });
+            f.media.Entries.Value = [f.item, f.item, f.item];
+            const task = f.task({ pageTimeoutMs: 100, archiveTarget: { identity: 'archive', rootId: 'root', format: 'application/x-cbz', useWebsiteSubDirectory: false,
+                checkpoint: async () => {}, beginExport: async () => {}, write: async () => { throw new Error('Must not export'); } } });
+            const running = task.Run(); await vi.advanceTimersByTimeAsync(150); await running;
+            const result = await task.Handle.completion;
+            expect(result.outcome).toBe('failed'); expect(result.fetch.receivedPages).toBe(0);
+            expect(result.errors).toContainEqual(expect.objectContaining({ stage: 'fetch', page: 1 }));
+            expect(f.item.Fetch).toHaveBeenCalledTimes(1); expect(signal.aborted).toBe(true);
+            expect(f.media.Store).not.toHaveBeenCalled(); expect(result.timings['fetch-and-validation']).toBeGreaterThanOrEqual(100);
+        } finally { vi.useRealTimers(); }
+    });
     it('Should cancel a paced archive without waiting for the next long request delay', async () => {
         vi.useFakeTimers();
         try {

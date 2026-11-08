@@ -1,5 +1,6 @@
 import { ArchiveChannel, type ArchiveCommand, type ArchiveReply, type ArchiveFileReceipt } from '../../../../app/electron/src/archive/ArchiveProtocol';
 import { ArchivePersistenceError, ArchiveCapacityError, type NativeArchiveTarget } from '../DownloadContract';
+import { IPCData } from './IPCData';
 
 export class ArchiveClient {
     constructor(private readonly invoke: (command: ArchiveCommand) => Promise<ArchiveReply> = command => {
@@ -23,7 +24,7 @@ export class ArchiveClient {
     }
 
     public async Request<T>(command: ArchiveCommand): Promise<T> {
-        const reply = await this.invoke(command);
+        const reply = await this.invoke(IPCData(command));
         if (reply.ok === false) {
             if (reply.error.kind === 'storage') throw new ArchiveCapacityError(reply.error.message, reply.error.storage);
             if (reply.error.kind === 'repository') throw new ArchivePersistenceError(reply.error.message);

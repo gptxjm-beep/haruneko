@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { SelectiveBudget } from './SelectiveHistory';
 import { createHash, randomUUID } from 'node:crypto';
 import { Count, Text, SafeMessage } from './ArchivePaths';
 import { ArchiveDevelopmentLimits as Limits, type ArchiveCoordinatorCommand, type ArchivePolicy, type ArchiveRunSnapshot, type ArchiveEvidence, type ArchiveWorkChapter } from './ArchiveCoordinatorProtocol';
@@ -29,9 +30,9 @@ export class ArchiveWorkRepository {
     private SelectiveBudget(sessionId: string): { mangas_used: number; chapters_started: number } | null {
         // Historical migration fixtures can still exercise their original schema before v9 is applied.
         if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE name='hub_queue'").get()
-            || !this.database.prepare('SELECT 1 FROM hub_queue WHERE session_id=?').get(sessionId)) return null;
-        const row = this.database.prepare('SELECT coalesce(sum(r.mangas_used),0) m,coalesce(sum(r.chapters_started),0) c FROM archive_runs r JOIN hub_queue q ON q.session_id=r.session_id').get()!;
-        return { mangas_used: Number(row.m), chapters_started: Number(row.c) };
+            || !this.database.prepare("SELECT 1 FROM hub_queue q JOIN sessions s ON s.id=? WHERE q.session_id=s.id OR json_extract(s.settings,'$._queueSeq')=q.seq").get(sessionId)) return null;
+        const budget = SelectiveBudget(this.database);
+        return { mangas_used: budget.mangasUsed, chapters_started: budget.chaptersStarted };
     }
 
     private Transaction<T>(action: () => T): T {

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { Count, Text } from './ArchivePaths';
+import { SelectiveBudget, AdmittedIdentity, LinkSelectiveSession } from './SelectiveHistory';
 import { ArchivePublicMessage, type ArchiveUIRepository } from './ArchiveUIRepository';
 import type { ArchiveWorkRepository } from './ArchiveWorkRepository';
 import type { MangaReference, QueueManga, QueueScope, QueueSnapshot, SelectiveQueueCommand } from './SelectiveQueueContract';
@@ -31,6 +32,7 @@ export function ValidateQueueScope(scope: QueueScope): QueueScope {
 }
 /** SQLite is the sole authority for selections, queue order and task identity. No files are removed here. */
 export class SelectiveQueueRepository {
+    private audits = new Map<number, { healthy: number; missing: number; review: number; at: number }>();
     constructor(private readonly db: DatabaseSync, private readonly ui: ArchiveUIRepository, private readonly work: ArchiveWorkRepository) {}
     private Transaction<T>(action: () => T): T {
         this.db.exec('BEGIN IMMEDIATE');
@@ -47,17 +49,59 @@ export class SelectiveQueueRepository {
             const detail = this.ui.Progress(String(row.session_id));
             progress = { registered: detail.registeredChapters, verified: detail.verifiedChapters, bytes: detail.writtenBytes, chapter: detail.currentChapter,
                 storage: detail.snapshot.storageError ? `${detail.snapshot.storageError.code} (${detail.snapshot.storageError.location})` : null };
+            const counts = this.db.prepare("SELECT sum(w.state='healthy' AND sc.local_state='healthy') verified,sum(w.state='failed') failed,sum(w.state='review' OR (w.state='healthy' AND sc.local_state<>'healthy')) review,sum(w.state='pending') pending,sum(w.state<>'excluded') selected FROM archive_work w JOIN session_chapters sc ON sc.session_id=w.session_id AND sc.chapter_key=w.chapter_key WHERE w.session_id=?").get(row.session_id)!;
+            Object.assign(progress, Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, Number(value ?? 0)])), { available: JSON.parse(String(row.scope ?? '{}'))._available });
         }
         if (row.session_id && state === 'Preparing') {
             const snapshot = this.work.Snapshot(String(row.session_id));
             if (snapshot.state === 'running' && snapshot.counts.downloading) state = 'Downloading';
         }
-        return { seq: Number(row.seq), siteId: String(row.site_id), mangaId: String(row.manga_id), title: String(row.title), siteName: String(row.site_name),
+        return { seq: Number(row.seq), enqueueVersion: Number(row.enqueue_version ?? 1), siteId: String(row.site_id), mangaId: String(row.manga_id), title: String(row.title), siteName: String(row.site_name),
+            historyCount: row.scope ? this.Sessions(Number(row.seq)).length : 0, existing: row.scope ? this.audits.get(Number(row.seq)) : undefined,
             state, reason: ArchivePublicMessage(row.reason), sessionId: row.session_id as string | null, scope: JSON.parse(String(row.scope ?? '{"mode":"all"}')), progress,
             detailsState: JSON.parse(String(row.scope ?? '{}'))._details?.state,
             inCurrentRun: !!this.db.prepare('SELECT 1 FROM hub_queue_batch_members m JOIN hub_queue_control c ON c.batch_id=m.batch_id WHERE m.queue_seq=? AND m.enqueue_version=?').get(row.seq, row.enqueue_version ?? 1) };
     }
     private Control() { return this.db.prepare('SELECT * FROM hub_queue_control WHERE id=1').get()!; }
+    public Sessions(seq: number): string[] {
+        const row = this.db.prepare('SELECT session_id FROM hub_queue WHERE seq=?').get(Count(seq, 'queue identity', Number.MAX_SAFE_INTEGER));
+        if (!row) return [];
+        return this.db.prepare("SELECT id FROM sessions WHERE id=? OR json_extract(settings,'$._queueSeq')=? ORDER BY (id=?) DESC,started_at DESC,id").all(row.session_id, seq, row.session_id).map(row => String(row.id));
+    }
+    public AuditRows(seq: number): Record<string, any>[] {
+        if (this.Control().state === 'Running') throw new Error('Pause before checking saved files');
+        const seen = new Set<string>(), result = [];
+        for (const id of this.Sessions(seq)) for (const row of this.db.prepare('SELECT sc.session_id,sc.chapter_key,c.chapter_id id FROM session_chapters sc JOIN chapters c ON c.key=sc.chapter_key WHERE session_id=?').all(id)) {
+            if (!seen.has(String(row.chapter_key))) { seen.add(String(row.chapter_key)); result.push(row); }
+        }
+        return result;
+    }
+    public AuditResult(seq: number, rows: { sessionId: string; key: string; state: string }[]): void {
+        const counts = { healthy: 0, missing: 0, review: 0, at: Date.now() };
+        for (const row of rows) {
+            if (row.state === 'healthy') counts.healthy++; else if (['missing', 'not-written'].includes(row.state)) counts.missing++; else counts.review++;
+            if (row.state === 'uncertain') this.db.prepare("UPDATE session_chapters SET local_state='uncertain' WHERE session_id=? AND chapter_key=?").run(row.sessionId, row.key);
+        }
+        this.audits.set(seq, counts);
+        if (counts.missing || counts.review) this.db.prepare("UPDATE hub_queue SET state='Review',reason='Previously saved files are missing or need review; inspect chapters before retry' WHERE seq=? AND state='Completed'").run(seq);
+    }
+    public Report(seq: number) {
+        const entry = this.db.prepare('SELECT * FROM hub_queue WHERE seq=?').get(Count(seq, 'queue identity', Number.MAX_SAFE_INTEGER));
+        if (!entry) throw new Error('Unknown queue identity');
+        return { schema: 1, title: entry.title, site: entry.site_name, generatedAt: new Date().toISOString(), budget: this.Budget(), sourceCompleteness: 'unproven', sessions: this.Sessions(seq).map(id => {
+            const counts = this.db.prepare("SELECT count(*) registered,sum(w.state<>'excluded') requested,sum(w.state='healthy' AND sc.local_state='healthy') completed,sum(w.state='failed') failed,sum(w.state='review' OR (w.state='healthy' AND sc.local_state<>'healthy')) review,sum(w.state='pending') pending FROM archive_work w JOIN session_chapters sc ON sc.session_id=w.session_id AND sc.chapter_key=w.chapter_key WHERE w.session_id=?").get(id)!;
+            const run = this.db.prepare('SELECT state,reason FROM archive_runs WHERE session_id=?').get(id);
+            const chapters = this.db.prepare("SELECT w.id,w.title,w.state,sc.local_state localState,w.reason,w.chapter_key FROM archive_work w JOIN session_chapters sc ON sc.session_id=w.session_id AND sc.chapter_key=w.chapter_key WHERE w.session_id=? ORDER BY w.position,w.id LIMIT 1000").all(id).map(chapter => ({ id: chapter.id, title: chapter.title, state: chapter.state, localState: chapter.localState, reason: ArchivePublicMessage(chapter.reason), attempts: this.db.prepare('SELECT state,stage,result,updated_at FROM attempts WHERE session_id=? AND chapter_key=? ORDER BY started_at DESC LIMIT 10').all(id, chapter.chapter_key).map(attempt => ({ state: attempt.state, stage: attempt.stage, updatedAt: attempt.updated_at, result: attempt.result ? JSON.parse(String(attempt.result)) : null })), errors: this.db.prepare('SELECT e.stage,e.message FROM errors e JOIN attempts a ON a.id=e.attempt_id WHERE a.session_id=? AND a.chapter_key=? ORDER BY e.id DESC LIMIT 10').all(id, chapter.chapter_key).map(error => ({ stage: error.stage, message: ArchivePublicMessage(error.message) })) }));
+            const history = this.db.prepare("SELECT reason,created_at FROM archive_events WHERE session_id=? AND kind='download-report' ORDER BY created_at DESC LIMIT 10").all(id).map(row => JSON.parse(String(row.reason)));
+            return { id, state: run?.state, reason: ArchivePublicMessage(run?.reason), counts: Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, Number(value ?? 0)])), chapters, truncated: Number(counts.registered) > 1000, history };
+        }), details: JSON.parse(String(entry.scope))._details?.state ?? 'Unavailable' };
+    }
+    private CaptureReport(seq: number, sessionId: unknown): void {
+        if (typeof sessionId !== 'string') return;
+        const report = this.Report(seq), session = report.sessions.find(session => session.id === sessionId);
+        if (!session) return; session.history = [];
+        this.db.prepare("INSERT INTO archive_events(session_id,manga_id,kind,reason,created_at) VALUES(?,'','download-report',?,?)").run(sessionId, JSON.stringify({ ...report, sessions: [session] }), Date.now());
+    }
     public Details(seq: number): Record<string, any> {
         const row = this.db.prepare('SELECT * FROM hub_queue WHERE seq=? AND removed=0').get(Count(seq, 'queue identity', Number.MAX_SAFE_INTEGER));
         if (!row?.session_id) throw new Error('Prepare this queue item before saving details');
@@ -67,9 +111,14 @@ export class SelectiveQueueRepository {
         const row = this.Details(seq), scope = JSON.parse(String(row.scope));
         this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify({ ...scope, _details: details }), seq);
     }
+    public MetadataEntry(seq: number): Record<string, any> {
+        const row = this.db.prepare('SELECT * FROM hub_queue WHERE seq=?').get(Count(seq, 'queue identity', Number.MAX_SAFE_INTEGER));
+        const id = row?.session_id ?? this.Sessions(seq)[0];
+        if (!row || !id) throw new Error('No saved metadata session');
+        return { ...row, session_id: id };
+    }
     public Budget(): { mangasUsed: number; chaptersStarted: number } {
-        const row = this.db.prepare('SELECT coalesce(sum(r.mangas_used),0) m,coalesce(sum(r.chapters_started),0) c FROM archive_runs r JOIN hub_queue q ON q.session_id=r.session_id').get()!;
-        return { mangasUsed: Number(row.m), chaptersStarted: Number(row.c) };
+        return SelectiveBudget(this.db);
     }
     public Summary(): QueueSnapshot {
         const control = this.Control();
@@ -86,6 +135,7 @@ export class SelectiveQueueRepository {
     }
     public Execute(command: SelectiveQueueCommand): any {
         if (command.operation === 'queue-summary') return this.Summary();
+        if (command.operation === 'queue-report') return this.Report(command.seq);
         if (command.operation === 'queue-chapters') {
             const row = this.db.prepare('SELECT session_id FROM hub_queue WHERE seq=? AND removed=0').get(Count(command.seq, 'queue identity', Number.MAX_SAFE_INTEGER));
             if (!row) throw new Error('Unknown queue item');
@@ -102,6 +152,21 @@ export class SelectiveQueueRepository {
             });
         }
         return this.Transaction(() => {
+            if (command.operation === 'queue-observation') {
+                const row = this.db.prepare('SELECT * FROM hub_queue WHERE seq=? AND removed=0').get(Count(command.seq, 'queue identity', Number.MAX_SAFE_INTEGER));
+                if (!row) throw new Error('Unknown queue item');
+                const scope = JSON.parse(String(row.scope));
+                this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify({ ...scope, _available: Count(command.available, 'observed chapters', 1000000) }), row.seq); return;
+            }
+            if (command.operation === 'queue-supplement') {
+                if (command.confirmed !== true || this.Control().state === 'Running') throw new Error('Pause and explicitly confirm a supplementary selection');
+                const row = this.Details(command.seq), scope = ValidateQueueScope(command.scope);
+                this.CaptureReport(Number(row.seq), row.session_id);
+                LinkSelectiveSession(this.db, Number(row.seq), row.session_id);
+                this.db.prepare("UPDATE hub_queue SET session_id=NULL,state='Queued',reason='Supplementary selection confirmed; previous manifest retained',enqueue_version=enqueue_version+1,scope=? WHERE seq=?").run(JSON.stringify({ ...scope, _details: JSON.parse(String(row.scope))._details }), row.seq);
+                this.db.exec("UPDATE hub_queue_control SET state='Paused',batch_id=NULL,current_seq=NULL WHERE id=1");
+                return;
+            }
             if (command.operation === 'queue-details-unavailable') {
                 const row = this.Details(command.seq), previous = JSON.parse(String(row.scope))._details;
                 this.SaveDetails(command.seq, { state: previous?.files?.length ? 'Partial' : 'Unavailable', files: previous?.files ?? [] }); return;
@@ -135,7 +200,7 @@ export class SelectiveQueueRepository {
                 for (const row of candidates) {
                     const scope = JSON.parse(String(row.scope));
                     if (scope.mode === 'selected' && scope.ids.length === 0) continue;
-                    if (row.admitted || budget.mangasUsed < preferences.policy.maxMangas && budget.chaptersStarted < preferences.policy.maxChapters) { chosen = row; break; }
+                    if (row.admitted || AdmittedIdentity(this.db, Number(row.seq)) || budget.mangasUsed < preferences.policy.maxMangas && budget.chaptersStarted < preferences.policy.maxChapters) { chosen = row; break; }
                 }
                 if (!chosen) {
                     const pending = this.db.prepare("SELECT 1 FROM hub_queue q JOIN hub_queue_batch_members m ON m.batch_id=? AND m.queue_seq=q.seq AND m.enqueue_version=q.enqueue_version WHERE q.removed=0 AND q.state IN ('Queued','Paused') AND NOT (json_extract(q.scope,'$.mode')='selected' AND json_array_length(q.scope,'$.ids')=0) LIMIT 1").get(control.batch_id);
@@ -148,6 +213,8 @@ export class SelectiveQueueRepository {
                         .run(sessionId, preferences.rootId, chosen.site_id, chosen.site_name, 'paused', JSON.stringify({ format: preferences.format, useWebsiteSubDirectory: preferences.useWebsiteSubDirectory }), Date.now(), Date.now());
                     this.db.prepare("INSERT INTO archive_runs(session_id,state,policy,catalog_done,catalog_state,index_state,index_evidence) VALUES(?,'paused',?,1,'finished','unknown','Explicit personal selection; not a site catalog')").run(sessionId, JSON.stringify(preferences.policy));
                     this.db.prepare('INSERT INTO archive_mangas(session_id,id,title,position) VALUES(?,?,?,0)').run(sessionId, chosen.manga_id, chosen.title);
+                    LinkSelectiveSession(this.db, Number(chosen.seq), sessionId);
+                    if (AdmittedIdentity(this.db, Number(chosen.seq))) this.db.prepare('UPDATE archive_mangas SET admitted=1 WHERE session_id=?').run(sessionId);
                 }
                 this.db.prepare("UPDATE hub_queue SET session_id=?,state='Preparing',reason='' WHERE seq=?").run(sessionId, chosen.seq);
                 this.db.prepare('UPDATE hub_queue_control SET current_seq=? WHERE id=1').run(chosen.seq);
@@ -169,6 +236,7 @@ export class SelectiveQueueRepository {
                     ?? this.db.prepare("SELECT reason FROM archive_mangas WHERE session_id=? AND state='review' AND reason<>'' LIMIT 1").get(row.session_id);
                 this.db.prepare('UPDATE hub_queue SET state=?,reason=? WHERE seq=?').run(state, ArchivePublicMessage(command.reason ?? (completed ? 'Requested registered chapters verified; source completeness unproven' : detail?.reason ?? (snapshot.reason || 'Unknown chapter ordering, coverage or output requires review'))), command.seq);
                 this.db.prepare('UPDATE hub_queue_control SET current_seq=NULL WHERE id=1').run();
+                this.CaptureReport(Number(command.seq), row.session_id);
                 if (snapshot.state === 'limited' || snapshot.storageError) this.db.prepare('UPDATE hub_queue_control SET state=?,reason=? WHERE id=1').run(snapshot.storageError ? 'Paused' : 'Limited', ArchivePublicMessage(snapshot.reason));
                 return;
             }
@@ -193,9 +261,15 @@ export class SelectiveQueueRepository {
                 const refs = command.reference ? [this.Reference(command.reference)] : this.db.prepare('SELECT site_id AS siteId,manga_id AS mangaId,title,site_name AS siteName FROM hub_selections ORDER BY seq').iterate();
                 for (const input of refs) {
                     const ref = this.Reference(input as unknown as MangaReference);
-                    const old = this.db.prepare('SELECT seq,removed FROM hub_queue WHERE site_id=? AND manga_id=?').get(ref.siteId, ref.mangaId);
+                    const old = this.db.prepare('SELECT seq,removed,session_id FROM hub_queue WHERE site_id=? AND manga_id=?').get(ref.siteId, ref.mangaId);
                     if (old) {
-                        if (old.removed) { this.db.prepare('UPDATE hub_queue SET removed=0,priority=?,enqueue_version=enqueue_version+1 WHERE seq=?').run(++priority, old.seq); added++; }
+                        if (old.removed) {
+                            this.CaptureReport(Number(old.seq), old.session_id);
+                            LinkSelectiveSession(this.db, Number(old.seq), old.session_id);
+                            const previous = this.db.prepare('SELECT scope FROM hub_queue WHERE seq=?').get(old.seq)!;
+                            this.db.prepare("UPDATE hub_queue SET removed=0,priority=?,enqueue_version=enqueue_version+1,session_id=NULL,state='Queued',reason='New selection; historical files, reports and cumulative budget retained',scope=? WHERE seq=?").run(++priority, JSON.stringify({ mode: 'all', order: 'source', _details: JSON.parse(String(previous.scope))._details }), old.seq); added++;
+                            if (this.Control().state !== 'Running') this.db.exec("UPDATE hub_queue_control SET state='Paused',batch_id=NULL,current_seq=NULL WHERE id=1");
+                        }
                         else existing++;
                     } else { this.db.prepare('INSERT INTO hub_queue(site_id,manga_id,title,site_name,priority,scope) VALUES(?,?,?,?,?,?)').run(ref.siteId, ref.mangaId, ref.title, ref.siteName, ++priority, JSON.stringify({ mode: 'all', order: 'source' })); added++; }
                 }
@@ -248,7 +322,8 @@ export class SelectiveQueueRepository {
                         this.db.prepare("UPDATE archive_mangas SET state='ready' WHERE session_id=? AND listed=1").run(row.session_id);
                         this.db.prepare("UPDATE hub_queue SET state='Paused',reason='Execution policy changed explicitly; files and attempt budgets preserved' WHERE seq=?").run(row.seq);
                     }
-                    this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify({ ...scope, _details: JSON.parse(String(row.scope))._details }), row.seq); return;
+                    const before = JSON.parse(String(row.scope));
+                    this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify({ ...scope, _details: before._details, _available: before._available }), row.seq); return;
                 }
                 if (command.action === 'remove') this.db.prepare('UPDATE hub_queue SET removed=1 WHERE seq=?').run(row.seq);
                 else {

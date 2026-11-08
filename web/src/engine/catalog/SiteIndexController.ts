@@ -10,9 +10,10 @@ export const IndexStateLabel: Record<IndexSiteState, string> = { queued: 'Queued
     failed: 'Update failed', stale: 'Older catalog retained', cancelled: 'Cancelled', review: 'Needs review' };
 export const IndexJobStateLabel: Record<IndexJob['state'], string> = { running: 'Updating', paused: 'Paused', interrupted: 'Interrupted', cancelled: 'Cancelled', finished: 'Selected updates finished' };
 export function IndexErrorLabel(code: string): string {
+    if (code === 'catalog-window-timeout') return 'The connector browser window timed out before returning data. This is separate from catalog idle time; access may need manual review.';
     if (code.startsWith('catalog-needs-review')) return 'No usable observation or an ambiguous result. The previous catalog is safe.';
     if (code.startsWith('catalog-conflict')) return 'A newer catalog or job state was preserved.';
-    if (code.startsWith('catalog-timeout')) return 'Catalog request timed out. Late results were not published.';
+    if (code.startsWith('catalog-timeout')) return 'Catalog deadline exceeded. Retained observations are partial; source completeness remains unproven.';
     if (code.startsWith('catalog-storage')) return 'Cannot save the catalog. Previously saved entries remain available.';
     if (code.startsWith('catalog-access')) return 'Access or indexing capability is unavailable. No protection bypass is attempted.';
     if (code.startsWith('catalog-interrupted') || code.startsWith('interrupted:')) return 'Previous update was interrupted. Resume explicitly within the saved retry budget.';

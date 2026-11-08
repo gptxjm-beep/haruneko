@@ -29,6 +29,8 @@ export class SelectiveQueueController {
     public async Selections(after?: number): Promise<SelectedManga[]> { return this.Client.Request({ operation: 'queue-selections', after }); }
     public async List(offset?: number): Promise<QueueManga[]> { return this.Client.Request({ operation: 'queue-list', offset }); }
     public async Edit(seq: number, action: 'remove' | 'up' | 'down', scope?: QueueScope): Promise<void> { await this.Client.Request({ operation: 'queue-edit', seq, action, scope }); await this.Refresh(); }
+    public async Supplement(seq: number, scope: QueueScope): Promise<void> { await this.Client.Request({ operation: 'queue-supplement', seq, scope, confirmed: true }); await this.Refresh(); }
+    public async Audit(seq: number): Promise<{ id: string; localState: string }[]> { return this.Client.Request({ operation: 'queue-audit', seq }); }
     public Error(error: unknown): void { this.State.Value = { ...this.State.Value, error: ArchiveUIError(error) }; }
     public ClearError(): void { if (this.State.Value.error) this.State.Value = { ...this.State.Value, error: '' }; }
 }

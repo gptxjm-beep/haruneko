@@ -1,9 +1,10 @@
 import { Fetch } from '../platform/FetchProvider';
-import { ValidateImage } from '../ValidateImage';
+import { ValidateImage, ImageValidationError } from '../ValidateImage';
 import type { MangaPlugin } from '../providers/MangaPlugin';
 import type { ArchiveClient } from './ArchiveClient';
 import { SaveCatalogAliases } from '../catalog/SiteIndexRepository';
 import type { QueueManga } from '../../../../app/electron/src/archive/SelectiveQueueContract';
+import type { MangaMetadata } from '../../../../app/electron/src/archive/MangaMetadata';
 
 async function LimitedBody(response: Response, maximum: number, signal: AbortSignal): Promise<Blob> {
     if (!response.ok || Number(response.headers.get('Content-Length')) > maximum) { await response.body?.cancel(); throw new Error('Optional response unavailable or too large'); }
@@ -69,6 +70,8 @@ export function ExtractMangaDetails(document: Document, source?: URL): { fields:
         cover ||= typeof data.image === 'string' ? data.image : data.image?.url;
     }
     if (aliases.length) fields['Alternate titles'] = [...new Set(aliases)].join(' / ');
+    const story = text(document.querySelector('.description-summary .summary__content, .summary__content, [itemprop="description"], .manga-description')?.textContent);
+    if (story) fields.Description = story;
     return { fields, aliases: [...new Set(aliases)].slice(0, 30), cover };
 }
 /** Optional, bounded and independent of chapter outcomes. Never scans all manga or source chapters. */
@@ -82,12 +85,15 @@ export async function DownloadMangaDetails(site: MangaPlugin, item: QueueManga, 
         if (stop.aborted) { cleanup(); abort(); }
     });
     let text = `Saved title: ${item.title}\nSource: ${site.Title}\n`, cover: Uint8Array, extension: string;
+    const metadata: MangaMetadata = { schema: 1, title: item.title, sourceName: site.Title, fields: {}, diagnostics: {} };
     let partial = false;
-    try { const progress = await client.Request<{ registeredChapters: number }>({ operation: 'ui-progress', sessionId: item.sessionId! }); text += `Registered chapters: ${progress.registeredChapters}\n`; } catch { /* Optional field. */ }
     try {
         const url = MangaDetailsURL(site.URI, item.mangaId); text += `Source URL: ${url.href}\n`;
+        metadata.sourceURL = url.href;
         const html = await bounded(LimitedBody(await bounded(Fetch(new Request(url, { signal: stop }))), 2 * 1024 ** 2, stop));
         const data = ExtractMangaDetails(new DOMParser().parseFromString(await html.text(), 'text/html'), url);
+        metadata.fields = data.fields; metadata.title = data.fields.Title || item.title;
+        metadata.diagnostics.page = 'available'; metadata.diagnostics.description = data.fields.Description ? 'source description extracted; completeness not asserted' : 'not-declared';
         text += Object.entries(data.fields).map(([key, value]) => `${key}: ${value}`).join('\n') + '\n';
         if (data.aliases.length) await SaveCatalogAliases(site.Identifier, item.mangaId, data.aliases).catch(() => {});
         if (data.cover) {
@@ -102,11 +108,11 @@ export async function DownloadMangaDetails(site: MangaPlugin, item: QueueManga, 
                     extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp' }[valid.type];
                     if (!extension) throw new Error('Unsupported cover format');
                     cover = new Uint8Array(await valid.arrayBuffer());
-                } catch { partial = true; }
+                } catch(cause) { partial = true; metadata.diagnostics.cover = cause instanceof ImageValidationError ? 'invalid-image' : 'fetch-or-format-unavailable'; }
             }
-        } else partial = true;
+        } else { partial = true; metadata.diagnostics.cover = 'not-declared'; }
         partial ||= !data.fields.Description;
-    } catch { partial = true; }
+    } catch(cause) { partial = true; metadata.diagnostics.page = (cause as Error)?.name === 'TimeoutError' ? 'timeout' : 'source-page-or-identity-unavailable'; }
     signal.throwIfAborted();
-    await client.Request({ operation: 'queue-details-save', seq: item.seq, text, cover, extension, partial });
+    await client.Request({ operation: 'queue-details-save', seq: item.seq, text, cover, extension, partial, metadata });
 }

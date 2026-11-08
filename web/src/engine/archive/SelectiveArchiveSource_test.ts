@@ -10,6 +10,12 @@ function Source(order: 'ascending' | 'descending' | 'unknown'): ArchiveSource {
         chapters: ['special', '1.5', '0'].map((id, position) => ({ id, title: id, position, language: 'ar' })), order, orderEvidence: 'Fixture source contract', coverage: { state: 'unknown', evidence: 'Fixture' } }) };
 }
 describe('Selective chapter manifest adapter', () => {
+    it('Should use the confirmed preview identities when a connector returns a different list direction at execution', async () => {
+        const ids = Array.from({ length: 15 }, (_, i) => String(15 - i));
+        const source: ArchiveSource = { site, Catalog: Source('unknown').Catalog, Chapters: async () => ({ chapters: ids.toReversed().map((id, position) => ({ id, title: id, position, language: 'ar' })), order: 'unknown', orderEvidence: 'Unknown connector direction', coverage: { state: 'unknown', evidence: 'Fixture' } }) };
+        const result = await new SelectiveArchiveSource(site, ref, { mode: 'selected', ids: ['1', '2', '3'], sourceIds: ids, order: 'first-last', direction: 'descending' }, source).Chapters(manga, new AbortController().signal);
+        expect(result.chapters.map(chapter => chapter.id)).toEqual(['1', '2', '3']);
+    });
     it('Should preserve a scattered selection across source, first-to-last and last-to-first execution', async () => {
         for (const order of ['source', 'first-last', 'last-first'] as const) {
             const manifest = await new SelectiveArchiveSource(site, ref, { mode: 'selected', ids: ['special', '0'], order }, Source('ascending')).Chapters(manga, new AbortController().signal);

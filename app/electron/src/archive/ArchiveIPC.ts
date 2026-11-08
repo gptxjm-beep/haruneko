@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { app, dialog, ipcMain, shell, nativeImage, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, open } from 'node:fs/promises';
 import { CatalogLogs } from './CatalogLogs';
 import { MangaDetailsFiles } from './MangaDetailsFiles';
 import { ArchiveRepository } from './ArchiveRepository';
@@ -132,6 +132,24 @@ export class ArchiveIPC {
             return new MangaDetailsFiles(this.repository, this.storage).Save(command.seq, command);
         }
         if (command.operation === 'queue-details-inspect') return new MangaDetailsFiles(this.repository, this.storage).Inspect(command.seq);
+        if (command.operation === 'queue-cover') return new MangaDetailsFiles(this.repository, this.storage).Cover(command.seq).catch(() => null);
+        if (command.operation === 'queue-export-report') {
+            const report = this.repository.Queue.Report(command.seq);
+            const selection = await dialog.showSaveDialog(this.window, { defaultPath: `download-report-${command.seq}-${Date.now()}.json`, filters: [{ name: 'JSON report', extensions: ['json'] }] });
+            if (selection.canceled || !selection.filePath) return false;
+            const file = await open(selection.filePath, 'wx', 0o600);
+            try { await file.writeFile(JSON.stringify(report, null, 2)); await file.sync(); } finally { await file.close(); }
+            return true;
+        }
+        if (command.operation === 'queue-audit') {
+            const results = [];
+            for (const row of this.repository.Queue.AuditRows(command.seq)) {
+                try { const result = await this.files.Recover(String(row.session_id), String(row.chapter_key)); results.push({ id: row.id, sessionId: row.session_id, key: row.chapter_key, state: result.localState }); }
+                catch { results.push({ id: row.id, sessionId: row.session_id, key: row.chapter_key, state: 'uncertain' }); }
+            }
+            this.repository.Queue.AuditResult(command.seq, results);
+            return results.map(row => ({ id: row.id, localState: row.state }));
+        }
         if (command.operation.startsWith('queue-')) return this.repository.Queue.Execute(command as SelectiveQueueCommand);
         switch (command.operation) {
             case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };

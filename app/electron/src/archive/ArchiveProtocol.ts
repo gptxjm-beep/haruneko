@@ -2,6 +2,7 @@ import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 import type { ArchiveStorageFault } from './ArchiveStorageContract';
 import type { ArchiveUICommand } from './ArchiveUIContract';
 import type { SelectiveQueueCommand } from './SelectiveQueueContract';
+import type { MangaMetadata } from './MangaMetadata';
 export const ArchiveChannel = 'ArchiveRepository::Request';
 export type ArchiveReply = { ok: true; value: unknown } | { ok: false; error: { kind: 'repository' | 'filesystem' | 'validation' | 'storage'; message: string; storage?: ArchiveStorageFault } };
 
@@ -31,6 +32,7 @@ export interface ArchiveFileReceipt {
 }
 
 export interface ArchiveAttemptResult {
+    timings?: Readonly<Record<string, number>>;
     outcome: string;
     receivedPages: number;
     validatedPages: number;
@@ -45,7 +47,10 @@ export type ArchiveCommand = ArchiveCoordinatorCommand | ArchiveUICommand | Sele
     | { operation: 'catalog-log'; runId: string; event: Record<string, unknown> }
     | { operation: 'catalog-open-logs' }
     | { operation: 'queue-details-inspect'; seq: number }
-    | { operation: 'queue-details-save'; seq: number; text?: string; cover?: Uint8Array; extension?: string; partial: boolean }
+    | { operation: 'queue-audit'; seq: number }
+    | { operation: 'queue-export-report'; seq: number }
+    | { operation: 'queue-cover'; seq: number }
+    | { operation: 'queue-details-save'; seq: number; text?: string; cover?: Uint8Array; extension?: string; partial: boolean; metadata?: MangaMetadata }
     | { operation: 'storage-check'; sessionId: string }
     | { operation: 'storage-image'; attemptId: string; bytes: number; quota: { usage: number; quota: number } }
     | { operation: 'storage-image-preflight'; attemptId: string; quota: { usage: number; quota: number } }

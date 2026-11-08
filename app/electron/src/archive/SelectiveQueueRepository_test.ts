@@ -17,6 +17,45 @@ function Fixture() {
     return { db, queue, reference, preferences, work, ui };
 }
 describe('Persistent selective queue', () => {
+    it('Should detach a removed task into history, create a fresh selection, and retain cumulative attempts after restart and supplement', () => {
+        const f = Fixture();
+        try {
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('a') });
+            f.queue.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            const first = f.queue.Execute({ operation: 'queue-next' });
+            f.db.prepare('UPDATE archive_runs SET mangas_used=1,chapters_started=3 WHERE session_id=?').run(first.sessionId);
+            f.queue.Execute({ operation: 'queue-result', seq: first.seq, reason: 'Fixture first run' });
+            f.queue.Execute({ operation: 'queue-stop', state: 'Paused', reason: 'Explicit pause' });
+            f.queue.Execute({ operation: 'queue-edit', seq: first.seq, action: 'remove' });
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('a') });
+            let row = f.queue.Execute({ operation: 'queue-list' })[0];
+            expect(row).toMatchObject({ sessionId: null, scope: { mode: 'all' }, state: 'Queued', historyCount: 1 });
+            expect(f.queue.Budget()).toEqual({ mangasUsed: 1, chaptersStarted: 3 });
+            const restarted = new SelectiveQueueRepository(f.db, f.ui, f.work); restarted.Recover();
+            restarted.Execute({ operation: 'queue-open', preferences: f.preferences, confirmed: true });
+            row = restarted.Execute({ operation: 'queue-next' }); expect(row.sessionId).not.toBe(first.sessionId);
+            expect(f.db.prepare('SELECT admitted FROM archive_mangas WHERE session_id=?').get(row.sessionId)!.admitted).toBe(1);
+            f.db.prepare('UPDATE archive_runs SET chapters_started=2 WHERE session_id=?').run(row.sessionId);
+            restarted.Execute({ operation: 'queue-result', seq: row.seq, reason: 'Fixture second run' });
+            restarted.Execute({ operation: 'queue-stop', state: 'Paused', reason: 'Explicit pause' });
+            restarted.Execute({ operation: 'queue-supplement', seq: row.seq, confirmed: true, scope: { mode: 'selected', ids: ['new'], order: 'source' } });
+            expect(restarted.Budget()).toEqual({ mangasUsed: 1, chaptersStarted: 5 });
+            expect(restarted.Execute({ operation: 'queue-list' })[0]).toMatchObject({ sessionId: null, historyCount: 2, scope: { ids: ['new'] } });
+            expect(restarted.Report(row.seq).sessions).toHaveLength(2);
+            expect(restarted.Report(row.seq).sessions.every(session => session.history.length > 0)).toBe(true);
+            expect(f.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+        } finally { f.db.close(); }
+    });
+    it('Should invalidate a completed queue badge after a disk audit detects a missing file without deleting evidence', () => {
+        const f = Fixture();
+        try {
+            f.queue.Execute({ operation: 'queue-add', reference: f.reference('a') });
+            const row = f.queue.Execute({ operation: 'queue-list' })[0];
+            f.db.prepare("UPDATE hub_queue SET state='Completed' WHERE seq=?").run(row.seq);
+            f.queue.AuditResult(row.seq, [{ sessionId: 'fixture', key: 'fixture', state: 'missing' }]);
+            expect(f.queue.Execute({ operation: 'queue-list' })[0]).toMatchObject({ state: 'Review', existing: { healthy: 0, missing: 1 } });
+        } finally { f.db.close(); }
+    });
     it('Should retain an intentionally empty selection without opening a task, spending budget or treating it as a source failure', () => {
         const f = Fixture();
         try {

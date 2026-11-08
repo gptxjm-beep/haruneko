@@ -21,6 +21,7 @@ let other;
 try {
     // Test-only native dialog fixture. Production code contains no test path override.
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: path.join(directory, 'isolated-download-report.json') });
     const url = process.env.HARUNEKO_ARCHIVE_TEST_URL;
     const preferences = { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: process.env.HARUNEKO_ARCHIVE_TEST_PRELOAD };
     window = new BrowserWindow({ show: false, width: 1280, height: 1000, webPreferences: preferences });
@@ -59,6 +60,30 @@ try {
     ipcMain.handle('SearchTest::Memory', () => app.getAppMetrics().find(item => item.pid === window.webContents.getOSProcessId())?.memory ?? null);
     ipcMain.handle('SearchTest::Capture', async () => {
         if (process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
+    });
+    ipcMain.handle('QueueTest::OfflineDetails', async () => {
+        const local = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, partition: 'offline-details-test' } });
+        let requests = 0;
+        local.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => { requests++; callback({ cancel: true }); });
+        try {
+            await local.loadFile(path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'index.html'));
+            const result = await local.webContents.executeJavaScript('({ title: document.title, text: document.body.innerText, width: document.querySelector("img")?.naturalWidth })');
+            return { ...result, requests };
+        } finally { local.webContents.session.webRequest.onBeforeRequest(null); local.destroy(); }
+    });
+    ipcMain.handle('QueueTest::RemoveIsolatedChapter', async () => {
+        // Fixed fixture output only; renderer supplies no path and this directory is created by this harness.
+        const manga = path.join(root, 'Queue source A', 'Berserk Queue');
+        const walk = async directory => {
+            for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+                if (entry.name === '00 - Manga Details') continue;
+                const file = path.join(directory, entry.name);
+                if (entry.isDirectory()) { if (await walk(file)) return true; }
+                else if (entry.isFile() && /\.(cbz|png|jpg)$/.test(entry.name)) { await fs.unlink(file); return true; }
+            }
+            return false;
+        };
+        if (!await walk(manga)) throw new Error('Isolated chapter fixture not found');
     });
     ipcMain.handle('QueueTest::Capture', async () => {
         if (process.env.HARUNEKO_QUEUE_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_QUEUE_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
@@ -116,6 +141,7 @@ try {
     assert.equal(queueRecovery.summary.chaptersStarted, queueFixture.chaptersStarted, 'Queue attempt budgets survive renderer replacement');
     assert.equal(queueRecovery.selected.length, queueFixture.selected, 'Personal selections survive renderer replacement');
     assert.equal(queueRecovery.rows.length, queueFixture.queued, 'Personal queue order and references survive renderer replacement');
+    assert.deepEqual(queueRecovery.rows.find(row => row.seq === queueFixture.chapterSelection).scope.ids, ['1','2','3'], 'The real fifteen-chapter Svelte selection survives renderer destruction');
     const indexRecovery = await window.webContents.executeJavaScript(`(async () => {
         const { SiteIndexRepository } = await import('/src/engine/catalog/SiteIndexRepository.ts');
         const { SiteIndexManager } = await import('/src/engine/catalog/SiteIndexManager.ts');

@@ -5,6 +5,7 @@ import { ResolveArchivePath, Fingerprint } from './ArchivePaths';
 import type { ArchiveRepository } from './ArchiveRepository';
 import type { ArchiveStorageController } from './ArchiveStorageController';
 import { SanitizeFileName } from '../../../../web/src/engine/FileName';
+import { RenderMangaMetadata, type MangaMetadata } from './MangaMetadata';
 
 export function CoverExtension(bytes: Uint8Array): string | undefined {
     const prefix = Buffer.from(bytes.subarray(0, 16));
@@ -19,7 +20,7 @@ export function CoverExtension(bytes: Uint8Array): string | undefined {
 export class MangaDetailsFiles {
     constructor(private readonly repository: ArchiveRepository, private readonly storage: ArchiveStorageController) {}
     private Context(seq: number) {
-        const row = this.repository.Queue.Details(seq), session = this.repository.Session(row.session_id), settings = session.settings;
+        const row = this.repository.Queue.MetadataEntry(seq), session = this.repository.Session(row.session_id), settings = session.settings;
         const folder = [settings.useWebsiteSubDirectory ? SanitizeFileName(row.site_name) : '', SanitizeFileName(row.title), '00 - Manga Details'].filter(Boolean).join('/');
         return { row, session, folder, root: this.repository.VerifyRoot(String(session.root_id)), saved: JSON.parse(String(row.scope))._details ?? { files: [] } };
     }
@@ -30,7 +31,8 @@ export class MangaDetailsFiles {
         }
         return { coverHealthy, state: c.saved.state ?? 'Unavailable' };
     }
-    public async Save(seq: number, input: { text?: string; cover?: Uint8Array; extension?: string; partial: boolean }): Promise<string> {
+    public async Save(seq: number, input: { text?: string; cover?: Uint8Array; extension?: string; partial: boolean; metadata?: MangaMetadata }): Promise<string> {
+        this.repository.Queue.Details(seq);
         if (input.text !== undefined && (typeof input.text !== 'string' || input.text.length > 1000000) || input.cover && (!(input.cover instanceof Uint8Array) || input.cover.byteLength > 8 * 1024 ** 2)) throw new Error('Invalid details payload');
         if (input.cover) {
             const extension = CoverExtension(input.cover);
@@ -51,6 +53,7 @@ export class MangaDetailsFiles {
         const files = [...c.saved.files ?? []]; let protectedOutput = false;
         const write = async (name: string, bytes: Uint8Array) => {
             this.repository.VerifyRoot(String(c.session.root_id));
+            await this.storage.Metadata(String(c.session.id), bytes.length);
             const target = await ResolveArchivePath(c.root, `${c.folder}/${name}`, true);
             const sha256 = createHash('sha256').update(bytes).digest('hex');
             try {
@@ -68,7 +71,27 @@ export class MangaDetailsFiles {
         for (const [name, bytes] of [['details.txt', input.text ? new TextEncoder().encode(input.text) : undefined], [`cover.${input.extension}`, input.cover]] as const) {
             if (bytes) { try { await write(name, bytes); } catch { protectedOutput = true; } }
         }
+        if (input.metadata) {
+            const data = input.metadata;
+            if (!data.fields || Object.keys(data.fields).length > 50 || Object.values(data.fields).some(value => typeof value !== 'string' || value.length > 20000)) throw new Error('Invalid manga metadata');
+            let metadata: MangaMetadata = { schema: 1, title: String(data.title || c.row.title).slice(0, 4096), sourceName: String(c.row.site_name), sourceURL: /^https?:\/\//.test(data.sourceURL ?? '') ? data.sourceURL : undefined, fields: data.fields, diagnostics: data.diagnostics, cover: files.find(file => /^cover\./.test(file.name))?.name };
+            if (metadata.sourceURL) { const url = new URL(metadata.sourceURL); url.search = ''; url.hash = ''; url.username = ''; url.password = ''; metadata.sourceURL = url.href; }
+            // Existing user-edited JSON remains authoritative; never silently replace it.
+            try { const old = JSON.parse(await readFile(await ResolveArchivePath(c.root, `${c.folder}/metadata.json`), 'utf8')); if (old?.schema === 1 && old.fields) metadata = old; }
+            catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') protectedOutput = true; }
+            try { await write('metadata.json', new TextEncoder().encode(JSON.stringify(metadata, null, 2))); await write('index.html', new TextEncoder().encode(RenderMangaMetadata(metadata))); } catch { protectedOutput = true; }
+        }
         const state = files.length ? input.partial || protectedOutput ? 'Partial' : 'Saved' : 'Unavailable';
         this.repository.Queue.SaveDetails(seq, { state, files }); return state;
+    }
+    public async Cover(seq: number): Promise<{ bytes: Uint8Array; extension: string } | null> {
+        const c = this.Context(seq);
+        for (const file of c.saved.files ?? []) if (/^cover\.(png|jpg|gif|webp|avif|bmp)$/.test(file.name) && file.size <= 8 * 1024 ** 2) {
+            try {
+                const current = await Fingerprint(c.root, `${c.folder}/${file.name}`);
+                if (current.sha256 === file.sha256 && current.size === file.size) return { bytes: await readFile(await ResolveArchivePath(c.root, `${c.folder}/${file.name}`)), extension: file.name.split('.')[1] };
+            } catch { /* No remote fallback when opening Downloads. */ }
+        }
+        return null;
     }
 }
