@@ -67,11 +67,15 @@ try {
             return { ...observed, freeBytes: available, usableBytes: available };
         } });
     ipcMain.handle('ArchiveHubTest::Capture', async () => {
+        // A real user previews in a visible window. Windows suspends intersection-based
+        // image loading in this harness's initially hidden BrowserWindow.
+        window.show();
+        window.focus();
+        await new Promise(resolve => setTimeout(resolve, 300));
         if (process.env.HARUNEKO_HUB_TEST_SCREENSHOT) {
-            window.showInactive();
-            await new Promise(resolve => setTimeout(resolve, 300));
             await fs.writeFile(process.env.HARUNEKO_HUB_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
         }
+        return window.isVisible();
     });
     ipcMain.handle('SearchTest::Memory', () => app.getAppMetrics().find(item => item.pid === window.webContents.getOSProcessId())?.memory ?? null);
     ipcMain.handle('SearchTest::Capture', async () => {

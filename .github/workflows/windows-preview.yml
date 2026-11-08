@@ -41,6 +41,8 @@ jobs:
         id: integration
         env:
           HARUNEKO_PRIORITY_CONNECTORS: '1'
+          HARUNEKO_HUB_TEST_SCREENSHOT: app/electron/bundle/windows-hub-ui.png
+          HARUNEKO_QUEUE_TEST_SCREENSHOT: app/electron/bundle/windows-downloads-ui.png
         run: node test/windows-electron-integration.mjs
       - name: Upload sanitized Windows integration checkpoint
         if: always() && steps.integration.outcome != 'skipped'
@@ -52,6 +54,8 @@ jobs:
           path: |
             app/electron/bundle/windows-electron-integration.json
             app/electron/bundle/windows-electron-integration.log
+            app/electron/bundle/windows-hub-ui.png
+            app/electron/bundle/windows-downloads-ui.png
       - name: Build isolated portable Preview with bundled web UI
         run: node app/electron/scripts/package-windows-preview.mjs
       - name: Run the extracted Windows EXE and verify Classic, SQLite, isolation and relaunch
