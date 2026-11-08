@@ -35,8 +35,22 @@ export class MangaInfoEditor {
         try { c = await this.Context(seq); } catch(error) { if ((error as Error).message === 'No saved metadata session') throw new Error('Manga folder has not been created yet'); throw error; }
         let owned = this.repository.HasMangaFiles(String(c.session.root_id), String(c.row.site_id), String(c.row.manga_id));
         try { const identity = await readFile(await ResolveArchivePath(c.root, `${c.folder}/identity.json`), 'utf8'); if (identity !== JSON.stringify([c.row.site_id, c.row.manga_id])) throw new Error('Manga identity conflict'); owned = true; } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-        if (!owned) throw new Error('Manga folder has not been created yet');
-        try { return path.dirname(await ResolveArchivePath(c.root, `${c.manga}/folder-check`)); } catch { throw new Error('Manga folder is unavailable or needs review'); }
+        if (!owned) throw new Error('No saved manga identity or file receipt; folder needs review');
+        const paths = this.repository.MangaFilePaths(String(c.session.root_id), String(c.row.site_id), String(c.row.manga_id));
+        // Historical titles can differ from today's queue title. Derive legacy directories
+        // only from the same root and stable manga identity's native file receipts.
+        const depth = c.session.settings.useWebsiteSubDirectory ? 2 : 1;
+        const folders = new Set(paths.filter(file => file.split('/').length > depth).map(file => file.split('/').slice(0, depth).join('/')));
+        if (folders.size > 1) throw new Error('Saved manga folders conflict; review file receipts');
+        const folder = folders.size ? [...folders][0] : c.manga;
+        if (folder !== c.manga) {
+            // Never open an empty guessed legacy folder: at least one exact recorded file must exist.
+            let present = false;
+            for (const relative of paths) { try { const file = await ResolveArchivePath(c.root, relative); if ((await stat(file)).isFile()) { present = true; break; } } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Manga folder path is unsafe or inaccessible'); } }
+            if (!present) throw new Error('Saved manga folder or files are missing');
+        }
+        try { return path.dirname(await ResolveArchivePath(c.root, `${folder}/folder-check`)); }
+        catch(error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Saved manga folder is missing'); throw new Error('Manga folder path is unsafe or inaccessible'); }
     }
     public async Save(seq: number, draft: MangaInfoDraft, confirmed: boolean, cover?: Uint8Array): Promise<void> {
         if (confirmed !== true) throw new Error('Confirm saving and backing up the existing manga information');

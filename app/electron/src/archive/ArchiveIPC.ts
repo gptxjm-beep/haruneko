@@ -136,7 +136,12 @@ export class ArchiveIPC {
         }
         if (['queue-open-folder', 'queue-info-read', 'queue-info-save'].includes(command.operation)) {
             const editor = new MangaInfoEditor(this.repository, new MangaDetailsFiles(this.repository, this.storage), this.storage, bytes => { const image = nativeImage.createFromBuffer(Buffer.from(bytes)), size = image.getSize(); return !image.isEmpty() && size.width * size.height <= 32000000; });
-            if (command.operation === 'queue-open-folder') { const error = await shell.openPath(await editor.Folder(command.seq)); if (error) throw new Error('Cannot open manga folder'); return; }
+            if (command.operation === 'queue-open-folder') {
+                const folder = await editor.Folder(command.seq);
+                try { const error = await shell.openPath(folder); if (error) throw new Error('System file browser could not open the manga folder'); }
+                catch { throw new Error('System file browser could not open the manga folder'); }
+                return;
+            }
             if (command.operation === 'queue-info-read') return editor.Read(command.seq);
             if (command.operation === 'queue-info-save') {
                 if (command.cover && (!(command.cover instanceof Uint8Array) || command.cover.length > 8 * 1024 ** 2 || nativeImage.createFromBuffer(Buffer.from(command.cover)).isEmpty())) throw new Error('Invalid cover');

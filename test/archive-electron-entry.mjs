@@ -21,6 +21,7 @@ let other;
 try {
     // Test-only native dialog fixture. Production code contains no test path override.
     dialog.showOpenDialog = async (_window, options) => ({ canceled: false, filePaths: [options.properties.includes('openFile') ? path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'cover.png') : root] });
+    const nativeOpenPath = shell.openPath.bind(shell);
     let openedMangaFolder = false;
     shell.openPath = async target => {
         const expected = path.join(root, 'Queue source A', 'Berserk Queue');
@@ -29,6 +30,10 @@ try {
             && actualIdentity.dev === expectedIdentity.dev && actualIdentity.ino === expectedIdentity.ino
             && await fs.realpath(target) === await fs.realpath(expected);
         if (process.env.GITHUB_ACTIONS) console.log(`::notice title=Open Folder fixture::Expected native directory: ${openedMangaFolder}; identical path spelling: ${target === expected}`);
+        if (process.platform === 'win32' && openedMangaFolder) {
+            assert.equal(await nativeOpenPath(target), '', 'The real Windows file browser must accept the isolated manga folder');
+            console.log('Real Windows shell.openPath accepted the isolated manga directory');
+        }
         return '';
     };
     ipcMain.handle('QueueTest::FolderOpened', () => openedMangaFolder);

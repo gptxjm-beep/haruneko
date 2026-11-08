@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ArchiveRepository } from './ArchiveRepository';
@@ -7,8 +7,28 @@ import { DefaultArchivePreferences } from './ArchiveUIContract';
 import { MangaInfoEditor } from './MangaInfoEditor';
 import { RenderMangaMetadata } from './MangaMetadata';
 import { MangaDetailsFiles } from './MangaDetailsFiles';
+import { ArchiveFiles } from './ArchiveFiles';
 import type { ArchiveStorageController } from './ArchiveStorageController';
 describe('Optional manga details files', () => {
+    it('Should open legacy directories from exact native receipts without a metadata witness or a matching current title, and never create missing folders', async () => {
+        const base = await mkdtemp(path.join(os.tmpdir(), 'manga-legacy-folder-')), root = path.join(base, 'output'); await mkdir(root);
+        const repository = new ArchiveRepository(path.join(base, 'db.sqlite')), output = new ArchiveFiles(repository);
+        try {
+            const grant = repository.GrantRoot(root);
+            repository.Queue.Execute({ operation: 'queue-add', reference: { siteId: 'test', siteName: 'Test', mangaId: 'stable-id', title: 'Current title' } });
+            repository.Queue.Execute({ operation: 'queue-open', preferences: { ...DefaultArchivePreferences, rootId: grant.rootId }, confirmed: true });
+            const row = repository.Queue.Execute({ operation: 'queue-next' });
+            const chapter = repository.RegisterChapter(row.sessionId, { siteId: 'test', mangaId: 'stable-id', chapterId: 'one', title: 'One', position: 0, orderConfidence: 'unknown', orderEvidence: '' });
+            repository.SetSessionState(row.sessionId, 'active');
+            const attempt = repository.BeginAttempt(row.sessionId, chapter); repository.Checkpoint(attempt, 'export', 1, 1, 1);
+            const token = await output.Begin(attempt, 'Test/Old title/One.cbz', 3); await output.Chunk(token, new Uint8Array([1, 2, 3])); await output.Finish(token);
+            const editor = new MangaInfoEditor(repository, new MangaDetailsFiles(repository, {} as ArchiveStorageController), {} as ArchiveStorageController);
+            expect(await editor.Folder(row.seq)).toBe(await realpath(path.join(root, 'Test', 'Old title')));
+            await rm(path.join(root, 'Test', 'Old title'), { recursive: true });
+            await expect(editor.Folder(row.seq)).rejects.toThrow('missing');
+            await expect(readFile(path.join(root, 'Test', 'Current title', '00 - Manga Details', 'identity.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally { await output.Close(); repository.Close(); await rm(base, { recursive: true, force: true }); }
+    });
     it('Should use the granted manga directory, protect existing text and retain an independent receipt', async () => {
         const base = await mkdtemp(path.join(os.tmpdir(), 'manga-details-'));
         const root = path.join(base, 'output'); await mkdir(root);

@@ -242,6 +242,10 @@ export class ArchiveRepository {
         return !!this.database.prepare('SELECT 1 FROM files f JOIN chapters c ON c.key=f.chapter_key WHERE f.root_id=? AND c.site_id=? AND c.manga_id=? LIMIT 1').get(rootId, siteId, mangaId);
     }
 
+    public MangaFilePaths(rootId: string, siteId: string, mangaId: string): string[] {
+        return this.database.prepare('SELECT f.path FROM files f JOIN chapters c ON c.key=f.chapter_key WHERE f.root_id=? AND c.site_id=? AND c.manga_id=? ORDER BY f.path').all(rootId, siteId, mangaId).map(row => String(row.path));
+    }
+
     public FindFile(rootId: string, relative: string): Row | undefined {
         return this.database.prepare('SELECT * FROM files WHERE root_id=? AND path_key=?').get(rootId, PathKey(relative));
     }
