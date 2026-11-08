@@ -8,7 +8,7 @@ export interface CatalogSource {
     name?: string;
     ObserveProgress?(listener: (count: number, status?: number) => void): () => void;
     Catalog(signal: AbortSignal): AsyncIterable<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage; httpStatus?: number }>;
-    ObserveVerification?(listener: (state: 'required' | 'blocked') => void): () => void;
+    ObserveVerification?(listener: (state: 'required' | 'blocked' | 'cleared') => void): () => void;
     Published?(): void;
 }
 export interface CatalogLock {
@@ -41,7 +41,7 @@ function Failure(error: unknown): { code: string; review: boolean; retry: boolea
 /** Metadata only. One request chain and one origin-wide lock; no DownloadManager or chapter/image entry point. */
 export class SiteIndexManager {
     public readonly State = new Observable<IndexSnapshot>({ job: null, sites: [] });
-    public readonly Activity = new Observable<{ owned: boolean; draining: boolean; error: string; progress?: { siteId: string; observed: number } }>({ owned: false, draining: false, error: '' });
+    public readonly Activity = new Observable<{ owned: boolean; draining: boolean; error: string; verification?: string; progress?: { siteId: string; observed: number } }>({ owned: false, draining: false, error: '' });
     private stop = new AbortController();
     private requested: 'paused' | 'cancelled' | undefined;
     private id: string | undefined;
@@ -130,14 +130,21 @@ export class SiteIndexManager {
             this.stop.signal.addEventListener('abort', abort, { once: true });
             if (this.stop.signal.aborted) abort();
             let timeout: ReturnType<typeof setTimeout>;
-            const resetDeadline = (initial = false) => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(new DOMException('Catalog idle deadline exceeded', 'TimeoutError')), initial ? this.policy.initialTimeoutMs ?? this.policy.timeoutMs : this.policy.timeoutMs); };
-            resetDeadline(true);
+            let awaitingHuman = false;
+            let maximum: ReturnType<typeof setTimeout>;
+            const maximumDeadline = () => { clearTimeout(maximum); maximum = setTimeout(() => controller.abort(new DOMException('Catalog maximum duration exceeded', 'TimeoutError')), 30 * 60_000); };
+            const resetDeadline = (initial = false) => { clearTimeout(timeout); if (!awaitingHuman) timeout = setTimeout(() => controller.abort(new DOMException('Catalog idle deadline exceeded', 'TimeoutError')), initial ? this.policy.initialTimeoutMs ?? this.policy.timeoutMs : this.policy.timeoutMs); };
+            resetDeadline(true); maximumDeadline();
             const verification = source?.ObserveVerification?.(state => {
                 this.Log({ event: 'verification', siteId: item.siteId, stage: state });
-                clearTimeout(timeout);
-                timeout = setTimeout(() => controller.abort(new DOMException('Verification window is still settling', 'TimeoutError')), state === 'required' ? 65000 : 1);
+                clearTimeout(timeout); clearTimeout(maximum);
+                if (state === 'cleared') { awaitingHuman = false; this.Activity.Value = { ...this.Activity.Value, verification: undefined }; resetDeadline(); maximumDeadline(); }
+                else if (state === 'required') { awaitingHuman = true; this.Activity.Value = { ...this.Activity.Value, verification: item.siteId }; }
+                else {
+                    this.Activity.Value = { ...this.Activity.Value, verification: undefined, draining: true, error: 'The browser window could not close. Stop this update and restart before retrying.' };
+                    controller.abort(new Error('Catalog window cleanup failed'));
+                }
             });
-            const maximum = setTimeout(() => controller.abort(new DOMException('Catalog maximum duration exceeded', 'TimeoutError')), 30 * 60_000);
             const unsubscribe = source?.ObserveProgress?.((count, status) => {
                 if (Number.isInteger(status) && status >= 100 && status <= 599) lastHTTP = status;
                 if (!Number.isSafeInteger(count) || count <= 0 || controller.signal.aborted) return;
@@ -187,7 +194,7 @@ export class SiteIndexManager {
                     this.Activity.Value = { ...this.Activity.Value, draining: false };
                 }
             } finally {
-                clearTimeout(timeout); clearTimeout(maximum); unsubscribe?.(); verification?.(); this.stop.signal.removeEventListener('abort', abort);
+                clearTimeout(timeout); clearTimeout(maximum); this.Activity.Value = { ...this.Activity.Value, verification: undefined }; unsubscribe?.(); verification?.(); this.stop.signal.removeEventListener('abort', abort);
                 if (this.settled) { try { await this.iterator?.return?.(); } catch { /* Original error is recorded separately. */ } this.iterator = undefined; }
             }
             await this.Refresh();

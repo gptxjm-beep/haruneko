@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FetchManagedCatalogWindow, CatalogVerificationRequired, OwnCatalogWindows, BindCatalogWindow, CatalogWindowContext } from './CatalogVerification';
+import { FetchManagedCatalogWindow, OwnCatalogWindows, BindCatalogWindow, CatalogWindowContext } from './CatalogVerification';
 import { Observable } from '../Observable';
 import { FetchRedirection } from '../platform/AntiScrapingDetection';
 import type { IRemoteBrowserWindow } from '../platform/RemoteBrowserWindow';
@@ -9,7 +9,7 @@ function fixture() {
     const context = { signal: new AbortController().signal, required: vi.fn(), blocked: vi.fn() };
     return { ready, win, context };
 }
-describe('Catalog-owned human verification deadline and window lifetime', () => {
+describe('Catalog-owned human verification manual waiting and window lifetime', () => {
     it('Should never capture an independent manual request merely because it shares the catalog origin', () => {
         const owner = new AbortController(), release = OwnCatalogWindows('https://fixture.invalid', owner.signal);
         try {
@@ -17,24 +17,25 @@ describe('Catalog-owned human verification deadline and window lifetime', () => 
             expect(CatalogWindowContext(manual)).toBeUndefined(); expect(CatalogWindowContext(managed)?.signal).toBe(owner.signal);
         } finally { release(); }
     });
-    it('Should hold ownership until the native window actually closes', async () => {
+    it('Should wait beyond 60 seconds and the ordinary request deadline until manual verification clears', async () => {
         vi.useFakeTimers(); try {
-            const f = fixture(); let release: () => void;
-            vi.mocked(f.win.Close).mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
-            let settled = false;
-            const running = FetchManagedCatalogWindow(f.win, new Request('https://fixture.invalid'), '', '', 0, 180000, f.context, async () => FetchRedirection.Interactive).catch(() => { settled = true; });
-            void f.ready.Dispatch(); await vi.advanceTimersByTimeAsync(60000); expect(settled).toBe(false); release(); await running; expect(settled).toBe(true);
+            const f = fixture(); let cleared = false, settled = false;
+            const running = FetchManagedCatalogWindow(f.win, new Request('https://fixture.invalid'), 'script', '', 0, 180000, f.context, async () => cleared ? FetchRedirection.None : FetchRedirection.Interactive);
+            void running.then(() => { settled = true; }, () => { settled = true; });
+            void f.ready.Dispatch(); await vi.advanceTimersByTimeAsync(240000);
+            expect(f.win.Close).not.toHaveBeenCalled(); expect(settled).toBe(false);
+            cleared = true; void f.ready.Dispatch(); await vi.advanceTimersByTimeAsync(1);
+            expect(await running).toBe('content'); expect(f.context.required).toHaveBeenCalledOnce();
         } finally { vi.useRealTimers(); }
     });
-    it('Should start 60 seconds at confirmed detection, not network start, and close before deferring', async () => {
+    it('Should retain ownership on cancellation until the verification window actually closes', async () => {
         vi.useFakeTimers(); try {
-            const f = fixture();
-            const running = FetchManagedCatalogWindow(f.win, new Request('https://fixture.invalid'), '', '', 0, 180000, f.context, async () => FetchRedirection.Interactive);
-            const result = expect(running).rejects.toBeInstanceOf(CatalogVerificationRequired);
-            await vi.advanceTimersByTimeAsync(30000); void f.ready.Dispatch(); await vi.advanceTimersByTimeAsync(59000);
-            expect(f.win.Close).not.toHaveBeenCalled(); void f.ready.Dispatch();
-            await vi.advanceTimersByTimeAsync(1000); await result;
-            expect(f.context.required).toHaveBeenCalledOnce(); expect(f.win.Close).toHaveBeenCalledOnce();
+            const f = fixture(), cancellation = new AbortController(); f.context.signal = cancellation.signal;
+            let release: () => void, settled = false;
+            vi.mocked(f.win.Close).mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+            const running = FetchManagedCatalogWindow(f.win, new Request('https://fixture.invalid'), '', '', 0, 180000, f.context, async () => FetchRedirection.Interactive).catch(() => { settled = true; });
+            void f.ready.Dispatch(); await vi.advanceTimersByTimeAsync(90000); cancellation.abort(); await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(false); release(); await running; expect(settled).toBe(true);
         } finally { vi.useRealTimers(); }
     });
     it('Should continue when the real detector clears before deadline without claiming a deferred success', async () => {

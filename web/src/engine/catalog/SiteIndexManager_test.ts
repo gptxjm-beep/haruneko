@@ -62,6 +62,20 @@ const wait = async (predicate: () => boolean) => { for (let i = 0; i < 2000; i++
 const manager = (ledger: Ledger, sources: CatalogSource[], mutex = lock(), timeoutMs = 2000) => new SiteIndexManager(ledger as unknown as SiteIndexRepository, () => sources, mutex, { timeoutMs, delayMs: 1, retryMs: 1 });
 
 describe('Sequential metadata-only site indexing', () => {
+    it('Should wait manually beyond a minute and the maximum network duration, then finish the same source before the next', async () => {
+        vi.useFakeTimers(); try {
+            const ledger = new Ledger(); let notify: (state: 'required' | 'blocked' | 'cleared') => void, release: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; }); const visited: string[] = [];
+            const first: CatalogSource = { id: 'human', ObserveVerification(listener) { notify = listener; return () => {}; }, Catalog: async function* (signal) {
+                visited.push('human'); notify('required'); await gate; signal.throwIfAborted(); notify('cleared'); yield { items: [{ id: 'm', title: 'M' }], terminal: true, coverage: unknown };
+            } };
+            const next: CatalogSource = { ...source('next'), Catalog: async function* () { visited.push('next'); yield { items: [{ id: 'n', title: 'N' }], terminal: true, coverage: unknown }; } };
+            const run = manager(ledger, [first, next]); await run.Start(); await vi.advanceTimersByTimeAsync(31 * 60000);
+            expect(visited).toEqual(['human']); expect(ledger.job?.current).toBe('human'); expect(run.Activity.Value.verification).toBe('human');
+            release(); await vi.advanceTimersByTimeAsync(100);
+            expect(visited).toEqual(['human', 'next']); expect(ledger.job?.state).toBe('finished'); expect(ledger.job?.items[0].attempts).toBe(1);
+        } finally { vi.useRealTimers(); }
+    });
     it('Should defer six confirmed challenges durably and resume only ready sources without exhausting connector retry budgets', async () => {
         const ledger = new Ledger(), calls = new Map<string, number>();
         const sites = Array.from({ length: 6 }, (_, n) => ({ id: `verify-${n}`, Catalog: async function* () { const count = (calls.get(`verify-${n}`) ?? 0) + 1; calls.set(`verify-${n}`, count); if (count === 1) throw new CatalogVerificationRequired(); yield { items: [{ id: 'm', title: 'M' }], terminal: true, coverage: unknown }; } }));

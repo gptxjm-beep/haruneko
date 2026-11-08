@@ -1,16 +1,16 @@
 import type { IRemoteBrowserWindow } from '../platform/RemoteBrowserWindow';
 import { CheckAntiScrapingDetection, FetchRedirection } from '../platform/AntiScrapingDetection';
-interface Context { signal: AbortSignal; required: () => void; blocked: () => void; }
+interface Context { signal: AbortSignal; required: () => void; blocked: () => void; cleared?: () => void; }
 const contexts = new Map<string, Context>();
 const requests = new WeakMap<Request, Context>();
-const observers = new Map<string, Set<(state: 'required' | 'blocked') => void>>();
+const observers = new Map<string, Set<(state: 'required' | 'blocked' | 'cleared') => void>>();
 export class CatalogVerificationRequired extends Error { constructor() { super('Verification required; the owned fetch window was closed'); this.name = 'CatalogVerificationRequired'; } }
-export function ObserveCatalogVerification(origin: string, listener: (state: 'required' | 'blocked') => void): () => void {
+export function ObserveCatalogVerification(origin: string, listener: (state: 'required' | 'blocked' | 'cleared') => void): () => void {
     const set = observers.get(origin) ?? new Set(); observers.set(origin, set); set.add(listener); return () => { set.delete(listener); if (!set.size) observers.delete(origin); };
 }
 export function OwnCatalogWindows(origin: string, signal: AbortSignal): () => void {
     if (contexts.has(origin)) throw new Error('Catalog windows for this source are already owned');
-    const context = { signal, required: () => { for (const listener of observers.get(origin) ?? []) listener('required'); }, blocked: () => { for (const listener of observers.get(origin) ?? []) listener('blocked'); } };
+    const context = { signal, required: () => { for (const listener of observers.get(origin) ?? []) listener('required'); }, blocked: () => { for (const listener of observers.get(origin) ?? []) listener('blocked'); }, cleared: () => { for (const listener of observers.get(origin) ?? []) listener('cleared'); } };
     contexts.set(origin, context); return () => { if (contexts.get(origin) === context) contexts.delete(origin); };
 }
 export function BindCatalogWindow(request: Request, owner?: AbortSignal): Request {
@@ -19,9 +19,9 @@ export function BindCatalogWindow(request: Request, owner?: AbortSignal): Reques
     return request;
 }
 export const CatalogWindowContext = (request: Request) => requests.get(request);
-/** Catalog-only flow. A confirmed challenge gets one deadline, never renewed by repeated DOM events. */
+/** Catalog-only manual verification. User waiting has no deadline; cancellation still owns window cleanup. */
 export function FetchManagedCatalogWindow<T extends void | JSONElement>(win: IRemoteBrowserWindow, request: Request, script: string, preload: string, delay: number, timeout: number, context: Context,
-    detect = CheckAntiScrapingDetection, verificationMs = 60000): Promise<T> {
+    detect = CheckAntiScrapingDetection): Promise<T> {
     context.signal.throwIfAborted();
     return new Promise((resolve, reject) => {
         let polling: ReturnType<typeof setInterval>;
@@ -42,10 +42,11 @@ export function FetchManagedCatalogWindow<T extends void | JSONElement>(win: IRe
                 const mode = await detect(win, request.url);
                 if (closing || settled) return;
                 if (mode === FetchRedirection.Interactive) {
-                    if (!detected) { detected = true; polling = setInterval(() => { void ready(); }, 1000); context.required(); clearTimeout(timer); timer = setTimeout(() => { void finish(new CatalogVerificationRequired()); }, verificationMs); }
+                    if (!detected) { detected = true; polling = setInterval(() => { void ready(); }, 1000); context.required(); clearTimeout(timer); }
                     await win.Show(); return;
                 }
                 if (mode === FetchRedirection.Automatic) return;
+                if (detected) { detected = false; clearInterval(polling); context.cleared?.(); }
                 await new Promise(done => setTimeout(done, delay));
                 if (!closing) await finish(undefined, await win.ExecuteScript<T>(script));
             } catch(error) { await finish(error); } finally { checking = false; }

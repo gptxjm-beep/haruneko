@@ -135,17 +135,18 @@
     const verificationCalls = new Map();
     const pending = Array.from({ length: 6 }, (_, n) => ({ id: `index-verify-${n}`, Catalog: async function* () {
         const count = (verificationCalls.get(n) ?? 0) + 1; verificationCalls.set(n, count);
-        if (count === 1) throw new CatalogVerificationRequired(); yield { items: entries(`verified-${n}`), terminal: true, coverage: unknown };
+        if (n === 0 && count === 1) throw new Error('Isolated genuine network failure');
+        if (count === (n === 0 ? 2 : 1)) throw new CatalogVerificationRequired(); yield { items: entries(`verified-${n}`), terminal: true, coverage: unknown };
     } }));
     await run([...pending, source('index-after-verification', entries('normal'))]);
     const reopened = new SiteIndexRepository();
-    record('Six deferred verification states persist in real IndexedDB while the normal source finishes and retry budgets stay intact', (await reopened.Snapshot()).job.state === 'waiting' && (await reopened.Snapshot()).job.items.filter(item => item.state === 'verification' && item.attempts === 0).length === 6 && (await saved('index-after-verification'))[0].id === 'normal');
+    record('Six deferred verification states persist in real IndexedDB while the normal source finishes and retry budgets stay intact', (await reopened.Snapshot()).job.state === 'waiting' && (await reopened.Snapshot()).job.items.filter(item => item.state === 'verification').length === 6 && (await reopened.Snapshot()).job.items.find(item => item.siteId === 'index-verify-0').attempts === 1 && (await saved('index-after-verification'))[0].id === 'normal');
     await reopened.VerificationReady('index-verify-2'); await reopened.Interrupt();
     record('Reopening revalidates deferred session readiness instead of trusting stale browser cookies', (await reopened.Snapshot()).job.items.find(item => item.siteId === 'index-verify-2').state === 'verification');
     await reopened.VerificationReady('index-verify-2');
     const retry = new SiteIndexManager(reopened, () => pending, navigator.locks, { timeoutMs: 30000, delayMs: 1, retryMs: 1 });
     await retry.Resume(); await wait(() => !retry.Activity.Value.owned);
-    record('Only an explicitly ready deferred source retries after resume, leaving the other five waiting', verificationCalls.get(2) === 2 && verificationCalls.get(0) === 1 && (await reopened.Snapshot()).job.items.filter(item => item.state === 'verification').length === 5);
+    record('Explicit resume safely converts all legacy deferred states into ordinary manual-wait attempts without resetting failure budgets', [...verificationCalls.entries()].every(([n, count]) => count === (n === 0 ? 3 : 2)) && (await reopened.Snapshot()).job.items.find(item => item.siteId === 'index-verify-0').attempts === 2 && (await reopened.Snapshot()).job.state === 'finished' && (await reopened.Snapshot()).job.items.filter(item => item.state === 'succeeded').length === 7);
     await retry.Stop(true); await reopened.VerificationReady('index-verify-0');
     record('Cancelling a verification batch prevents a late ready marker from reviving it', (await reopened.Snapshot()).job.state === 'cancelled' && (await reopened.Snapshot()).job.items.every(item => item.state !== 'ready'));
     // Leave a real interrupted job for the native harness to recover after destroying the renderer.

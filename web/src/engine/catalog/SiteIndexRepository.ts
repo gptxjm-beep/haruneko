@@ -83,6 +83,13 @@ export class SiteIndexRepository {
                 const site = await Site(tx, item.siteId);
                 tx.objectStore(meta).put({ ...site, state: item.state, error: 'interrupted: previous attempt did not publish a catalog' });
             }
+            // Legacy deferred/ready rows become ordinary queued work only on explicit resume.
+            // Their attempts were already refunded by Defer; never reset genuine failure budgets.
+            for (const item of job.items) if (['verification', 'ready'].includes(item.state)) {
+                item.state = item.attempts >= 2 ? 'review' : 'queued';
+                const site = await Site(tx, item.siteId);
+                tx.objectStore(meta).put({ ...site, state: item.state, error: null });
+            }
             job.state = 'running'; job.current = null; job.updatedAt = Date.now();
             tx.objectStore(staging).clear(); tx.objectStore(jobs).put(job); return job;
         });
