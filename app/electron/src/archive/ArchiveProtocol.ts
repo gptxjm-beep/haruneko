@@ -1,3 +1,4 @@
+import type { MangaInfoDraft } from './MangaInfoEditor';
 import type { CartCommand } from './SelectionCartContract';
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 import type { ArchiveStorageFault } from './ArchiveStorageContract';
@@ -44,7 +45,11 @@ export interface ArchiveAttemptResult {
     errors: { stage: string; message: string }[];
 }
 
-export type ArchiveCommand = CartCommand | ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
+export type ArchiveCommand = CartCommand |
+    { operation: 'queue-open-folder'; seq: number } |
+    { operation: 'queue-info-read'; seq: number } |
+    { operation: 'queue-info-cover' } |
+    { operation: 'queue-info-save'; seq: number; draft: MangaInfoDraft; confirmed: boolean; cover?: Uint8Array } | ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
     | { operation: 'catalog-log'; runId: string; event: Record<string, unknown> }
     | { operation: 'catalog-open-logs' }
     | { operation: 'queue-details-inspect'; seq: number }

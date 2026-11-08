@@ -60,7 +60,7 @@ export class SelectiveQueueRepository {
         return { seq: Number(row.seq), enqueueVersion: Number(row.enqueue_version ?? 1), siteId: String(row.site_id), mangaId: String(row.manga_id), title: String(row.title), siteName: String(row.site_name),
             historyCount: row.scope ? this.Sessions(Number(row.seq)).length : 0, existing: row.scope ? this.audits.get(Number(row.seq)) : undefined,
             state, reason: ArchivePublicMessage(row.reason), sessionId: row.session_id as string | null, scope: JSON.parse(String(row.scope ?? '{"mode":"all"}')), progress,
-            detailsState: JSON.parse(String(row.scope ?? '{}'))._details?.state,
+            detailsState: JSON.parse(String(row.scope ?? '{}'))._details?.state, detailsRevision: JSON.parse(String(row.scope ?? '{}'))._details?.updatedAt,
             inCurrentRun: !!this.db.prepare('SELECT 1 FROM hub_queue_batch_members m JOIN hub_queue_control c ON c.batch_id=m.batch_id WHERE m.queue_seq=? AND m.enqueue_version=?').get(row.seq, row.enqueue_version ?? 1) };
     }
     private Control() { return this.db.prepare('SELECT * FROM hub_queue_control WHERE id=1').get()!; }
@@ -111,6 +111,10 @@ export class SelectiveQueueRepository {
     public SaveDetails(seq: number, details: unknown): void {
         const row = this.Details(seq), scope = JSON.parse(String(row.scope));
         this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=?').run(JSON.stringify({ ...scope, _details: details }), seq);
+    }
+    public SaveMetadataDetails(seq: number, details: unknown): void {
+        const row = this.MetadataEntry(seq), scope = JSON.parse(String(row.scope));
+        this.db.prepare('UPDATE hub_queue SET scope=? WHERE seq=? AND removed=0').run(JSON.stringify({ ...scope, _details: { ...(details as object), updatedAt: Date.now() } }), seq);
     }
     public MetadataEntry(seq: number): Record<string, any> {
         const row = this.db.prepare('SELECT * FROM hub_queue WHERE seq=?').get(Count(seq, 'queue identity', Number.MAX_SAFE_INTEGER));

@@ -1,4 +1,7 @@
 <script lang="ts">
+    import MangaInfoEditor from './MangaInfoEditor.svelte';
+    import { OpenHubManga } from '../../models/HubNavigation';
+    import { ArchiveClient } from '../../../../engine/archive/ArchiveClient';
     import { onMount, onDestroy } from 'svelte';
     import { GetSelectiveQueueController, QueueSupported } from '../../../../engine/archive/SelectiveQueueController';
     import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
@@ -24,6 +27,7 @@
     let timer: ReturnType<typeof setInterval>;
     let loadSerial = 0, polling = false;
     const audited = new Set<string>();
+    let removal = $state<number>();
     onDestroy(() => { clearInterval(timer); loadSerial++; });
     const observe = value => { view = value; };
     queue.State.Subscribe(observe); onDestroy(() => queue.State.Unsubscribe(observe));
@@ -61,7 +65,7 @@
 </script>
 <section data-testid={selections ? 'personal-selections' : 'personal-queue'}>
     <h2>{selections ? 'Saved selections' : 'Downloads'}</h2>
-    <details class="safety"><summary>Safety and compatibility</summary><p role="note">SQLite v10: older Previews may reject this database. Downgrading requires a consistent backup of the previous closed profile; never delete the database or edit its schema version.</p></details>
+    <details class="safety"><summary>Safety and compatibility</summary><p role="note">SQLite v11: older Previews may reject this database. Downgrading requires a consistent backup of the previous closed profile; never delete the database or edit its schema version.</p></details>
     {#if !QueueSupported()}<p role="alert">Downloads require the Electron desktop client. No task has started.</p>{:else}
         <p>Selected: {view.summary?.selected ?? 0} • Download entries: {view.summary?.queued ?? 0}. Adding entries does not start downloads.</p>
         {#if selections}<button disabled={busy} onclick={() => action(() => queue.Add())}>Add Selected to Queue</button>{/if}
@@ -87,7 +91,7 @@
         {#if view.error}<p role="alert">{view.error}</p>{/if}
         {#each rows as row, index (JSON.stringify([row.seq, 'enqueueVersion' in row ? row.enqueueVersion : 0]))}
             <article data-testid="personal-entry">
-                <div class="card-overview"><div class="identity">{#if !selections}<SavedCover seq={row.seq} state={'detailsState' in row ? row.detailsState : undefined} />{/if}<div><h3 dir="auto">{row.title}</h3><p dir="auto">{row.siteName}</p>{#if 'state' in row}<strong>{row.state}</strong><progress max={row.progress?.selected || row.progress?.registered || 1} value={row.progress?.verified ?? 0} aria-label="Verified registered chapters"></progress>{/if}</div></div>
+                <div class="card-overview"><div class="identity">{#if !selections}<SavedCover seq={row.seq} state={'detailsState' in row ? `${row.detailsState}:${row.detailsRevision}` : undefined} />{/if}<div><h3 dir="auto">{row.title}</h3><p dir="auto">{row.siteName}</p>{#if 'state' in row}<strong>{row.state}</strong><progress max={row.progress?.selected || row.progress?.registered || 1} value={row.progress?.verified ?? 0} aria-label="Verified registered chapters"></progress>{/if}</div></div>
                 {#if 'state' in row}<dl class="stats"><div><dt>Available Chapters (observed)</dt><dd>{available(row) ?? 'Unknown'}</dd></div><div><dt>Selected</dt><dd>{selectedCount(row) ?? 'Unknown'}</dd></div><div><dt>Completed (verified)</dt><dd>{row.progress?.verified ?? 0}</dd></div><div><dt>Downloading</dt><dd dir="auto">{row.progress?.chapter ?? '—'}</dd></div><div><dt>Failed</dt><dd>{row.progress?.failed ?? 0}</dd></div><div><dt>Partial / Review</dt><dd>{row.progress?.review ?? row.existing?.review ?? 0}</dd></div><div><dt>Pending</dt><dd>{row.progress?.pending ?? 'Unknown'}</dd></div></dl>{/if}</div>
                 {#if missing[index]}<p class="warning">This reference is missing from the current catalog. Your selection is retained; the catalog may be incomplete.</p>{/if}
                 {#if selections}
@@ -97,6 +101,7 @@
                     {#if row.existing}<p class="existing">{row.existing.healthy ? 'Existing verified chapters found' : 'Previous files checked'}: {row.existing.healthy} healthy · {row.existing.missing} missing · {row.existing.review} need review.</p>{/if}
                     {#if row.reason}<p class="reason" role={['Failed','Review'].includes(row.state) ? 'alert' : 'status'}>{row.reason}</p>{/if}
                     {#if row.detailsState}<p>Additional details: {row.detailsState}</p>{/if}
+                    <button disabled={busy} onclick={() => action(async () => OpenHubManga(row))}>Open Manga</button><button disabled={busy} onclick={() => action(() => new ArchiveClient().Request<void>({ operation: 'queue-open-folder', seq: row.seq }))}>Open Folder</button>
                     <QueueChapters {row} running={view.summary?.state === 'Running' || busy} onedit={work => action(work, true)} />
                     {#if row.progress?.storage}<p role="alert">Storage stopped: {row.progress.storage}. Completed files are safe. Resolve the storage issue before resuming.</p>{/if}
                     <details><summary>Details and scope</summary><p dir="auto">Source ID: <bdi>{row.mangaId}</bdi></p><p>{row.reason}</p>
@@ -113,9 +118,9 @@
                             <label>To <input type="number" min="1" value={row.scope.to} disabled={busy} onchange={event => action(() => queue.Edit(row.seq, 'up', { mode: 'range', from: row.scope.mode === 'range' ? row.scope.from : 1, to: Number(event.currentTarget.value) }))} /></label>
                         {/if}
                     {/if}
-                    </details>{#if row.historyCount}<DownloadReport seq={row.seq} scope={row.scope} disabled={busy || view.summary?.state === 'Running' || !row.sessionId} onretry={scope => action(() => queue.Supplement(row.seq, scope), true)} /><button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(async () => { await queue.Audit(row.seq); })}>Check files</button>{/if}<button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'up'))}>Move up</button>
+                    </details>{#if row.historyCount}<DownloadReport seq={row.seq} scope={row.scope} disabled={busy || view.summary?.state === 'Running' || !row.sessionId} onretry={scope => action(() => queue.Supplement(row.seq, scope), true)} /><MangaInfoEditor seq={row.seq} onchanged={() => action(async () => {})} />{/if}<details><summary>More</summary>{#if row.historyCount}<button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(async () => { await queue.Audit(row.seq); })}>Check files</button>{/if}<button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'up'))}>Move up</button>
                     <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'down'))}>Move down</button>
-                    <button disabled={busy || ['Preparing','Downloading'].includes(row.state)} onclick={() => action(() => queue.Edit(row.seq, 'remove'))}>Remove from downloads</button>
+                    <button disabled={busy || ['Preparing','Downloading'].includes(row.state)} onclick={() => { removal = row.seq; }}>Remove from downloads</button></details>{#if removal === row.seq}<p role="alert">Remove this task? Files, history and budgets will be retained.</p><button onclick={() => action(async () => { await queue.Edit(row.seq, 'remove'); removal = undefined; })}>Confirm remove from downloads</button><button onclick={() => removal = undefined}>Keep task</button>{/if}
                 {/if}
             </article>
         {/each}

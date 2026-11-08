@@ -36,7 +36,7 @@ export class ArchiveStorageController {
     /** Optional manga metadata is written on the final archive volume, independently of browser/profile disks. */
     public async Metadata(sessionId: string, bytes: number): Promise<void> {
         const session = this.repository.Session(sessionId), claims = this.Claims(String(session.root_id));
-        claims.at(-1)!.bytes = BigInt(Count(bytes, 'metadata bytes', 16 * 1024 ** 2));
+        claims.at(-1)!.bytes = BigInt(Count(bytes, 'metadata bytes', 64 * 1024 ** 2));
         await this.Safety.Check(claims);
     }
 

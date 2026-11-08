@@ -30,21 +30,28 @@ export function MangaDetailsURL(site: URL, id: string): URL {
     if (url.origin !== site.origin || !/^https?:$/.test(url.protocol) || url.username || url.password || url.search) throw new Error('Unsupported manga URL');
     url.hash = ''; return url;
 }
-export function ExtractMangaDetails(document: Document, source?: URL): { fields: Record<string, string>; aliases: string[]; cover?: string } {
+export function ExtractMangaDetails(document: Document, source?: URL): { fields: Record<string, string>; aliases: string[]; cover?: string; covers: string[] } {
     const fields: Record<string, string> = {}, aliases: string[] = [];
     const text = (value: unknown) => typeof value === 'string' ? value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20000) : '';
     const meta = (key: string) => document.querySelector<HTMLMetaElement>(`meta[property="${key}"],meta[name="${key}"]`)?.content;
-    let cover = meta('og:image');
+    let cover = meta('og:image') || meta('twitter:image');
+    const covers: string[] = [];
+    const image = document.querySelector<HTMLImageElement>('.summary_image img, .seriestuimg img, .series-thumb img, [itemprop="image"]');
+    if (image) {
+        const variants = (image.getAttribute('data-srcset') || image.getAttribute('srcset') || '').split(',').map(value => value.trim().split(/\s+/)).toSorted((a, b) => parseFloat(b[1] || '0') - parseFloat(a[1] || '0'));
+        covers.push(...variants.map(value => value[0]), image.getAttribute('data-src'), image.getAttribute('data-lazy-src'), image.getAttribute('src'));
+    }
     if (meta('og:title')) fields.Title = text(meta('og:title'));
     if (meta('description') || meta('og:description')) fields.Description = text(meta('description') || meta('og:description'));
     const selectors = { Description: '.description-summary .summary__content', Author: '.author-content', Artist: '.artist-content', Genres: '.genres-content' };
     for (const [field, selector] of Object.entries(selectors)) if (!fields[field] && text(document.querySelector(selector)?.textContent)) fields[field] = text(document.querySelector(selector).textContent);
     cover ||= document.querySelector<HTMLImageElement>('.summary_image img')?.getAttribute('data-src') || document.querySelector<HTMLImageElement>('.summary_image img')?.getAttribute('src');
     for (const item of document.querySelectorAll('.post-content_item')) {
-        const label = text(item.querySelector('.summary-heading')?.textContent).toLowerCase();
+        const label = text(item.querySelector('.summary-heading')?.textContent).toLowerCase().replace(/[:：]$/, '').trim();
         const value = text(item.querySelector('.summary-content')?.textContent);
         if (/^(alternative|alternative names|other names|الأسماء الأخرى|اسماء اخرى)$/.test(label) && value) aliases.push(...value.split(/;|\n/).map(value => value.trim()).filter(Boolean));
         if (/^(status|الحالة)$/.test(label) && value) fields.Status = value;
+        if (/^(type|النوع)$/.test(label) && value) fields.Type = value;
     }
     const candidates: Record<string, any>[] = [];
     for (const script of [...document.querySelectorAll('script[type="application/ld+json"]')].slice(0, 10)) {
@@ -71,8 +78,12 @@ export function ExtractMangaDetails(document: Document, source?: URL): { fields:
     }
     if (aliases.length) fields['Alternate titles'] = [...new Set(aliases)].join(' / ');
     const story = text(document.querySelector('.description-summary .summary__content, .summary__content, [itemprop="description"], .manga-description')?.textContent);
+    const title = text(document.querySelector('.post-title h1, .seriestuheader h1, h1[itemprop="name"]')?.textContent);
+    if (title) fields.Title = title;
     if (story) fields.Description = story;
-    return { fields, aliases: [...new Set(aliases)].slice(0, 30), cover };
+    if (/^(?:read (?:the )?latest|اقرأ أحدث|اقرا احدث|أفضل موقع لقراءة|افضل موقع لقراءة)/i.test(fields.Description ?? '')) delete fields.Description;
+    const candidatesCovers = [...new Set([...covers, cover].filter(value => typeof value === 'string' && value.trim() && !value.startsWith('data:')))];
+    return { covers: candidatesCovers.slice(0, 5), fields, aliases: [...new Set(aliases)].slice(0, 30), cover };
 }
 /** Optional, bounded and independent of chapter outcomes. Never scans all manga or source chapters. */
 export async function DownloadMangaDetails(site: MangaPlugin, item: QueueManga, client: ArchiveClient, signal: AbortSignal): Promise<void> {
@@ -96,21 +107,22 @@ export async function DownloadMangaDetails(site: MangaPlugin, item: QueueManga, 
         metadata.diagnostics.page = 'available'; metadata.diagnostics.description = data.fields.Description ? 'source description extracted; completeness not asserted' : 'not-declared';
         text += Object.entries(data.fields).map(([key, value]) => `${key}: ${value}`).join('\n') + '\n';
         if (data.aliases.length) await SaveCatalogAliases(site.Identifier, item.mangaId, data.aliases).catch(() => {});
-        if (data.cover) {
-            const existing = await client.Request<{ coverHealthy: boolean }>({ operation: 'queue-details-inspect', seq: item.seq });
-            if (!existing.coverHealthy) {
+        const existing = await client.Request<{ coverHealthy: boolean }>({ operation: 'queue-details-inspect', seq: item.seq });
+        if (!existing.coverHealthy) {
+            for (const candidate of data.covers) {
                 try {
-                    const imageURL = new URL(data.cover, url);
-                    if (!/^https?:$/.test(imageURL.protocol) || imageURL.username || imageURL.password) throw new Error('Unsupported cover URL');
+                    const imageURL = new URL(candidate, url);
+                    if (!/^https?:$/.test(imageURL.protocol) || imageURL.username || imageURL.password) continue;
                     const response = await bounded(Fetch(new Request(imageURL, { signal: stop, headers: { Referer: url.href } })));
                     const bytes = await bounded(LimitedBody(response, 8 * 1024 ** 2, stop));
                     const valid = await ValidateImage(bytes, stop);
                     extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp' }[valid.type];
-                    if (!extension) throw new Error('Unsupported cover format');
-                    cover = new Uint8Array(await valid.arrayBuffer());
-                } catch(cause) { partial = true; metadata.diagnostics.cover = cause instanceof ImageValidationError ? 'invalid-image' : 'fetch-or-format-unavailable'; }
+                    if (!extension) continue;
+                    cover = new Uint8Array(await valid.arrayBuffer()); metadata.diagnostics.cover = 'source-image-validated'; break;
+                } catch(cause) { metadata.diagnostics.cover = cause instanceof ImageValidationError ? 'invalid-image' : 'fetch-or-format-unavailable'; if (stop.aborted) break; }
             }
-        } else { partial = true; metadata.diagnostics.cover = 'not-declared'; }
+            if (!cover) { partial = true; metadata.diagnostics.cover ||= 'not-declared'; }
+        }
         partial ||= !data.fields.Description;
     } catch(cause) { partial = true; metadata.diagnostics.page = (cause as Error)?.name === 'TimeoutError' ? 'timeout' : 'source-page-or-identity-unavailable'; }
     signal.throwIfAborted();

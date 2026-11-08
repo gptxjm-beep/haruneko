@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ArchiveRepository } from './ArchiveRepository';
 import { DefaultArchivePreferences } from './ArchiveUIContract';
+import { MangaInfoEditor } from './MangaInfoEditor';
 import { RenderMangaMetadata } from './MangaMetadata';
 import { MangaDetailsFiles } from './MangaDetailsFiles';
 import type { ArchiveStorageController } from './ArchiveStorageController';
@@ -30,12 +31,20 @@ describe('Optional manga details files', () => {
             await files.Save(row.seq, { metadata, partial: false });
             const folder = path.dirname(text), json = JSON.parse(await readFile(path.join(folder, 'metadata.json'), 'utf8'));
             expect(json.title).toBe(metadata.title);
-            const html = await readFile(path.join(folder, 'index.html'), 'utf8');
+            const html = await readFile(path.join(path.dirname(folder), '00 - Manga Details.html'), 'utf8');
             expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain('<script>');
-            expect(html).toBe(RenderMangaMetadata(json));
+            expect(html).toBe(RenderMangaMetadata(json, '00 - Manga Details/'));
             expect(html).toContain("default-src 'none'"); expect(html).not.toContain('Registered');
             await files.Save(row.seq, { metadata: { ...metadata, fields: { Description: 'Must not overwrite' } }, partial: false });
             expect(JSON.parse(await readFile(path.join(folder, 'metadata.json'), 'utf8')).fields.Description).toBe('Real story & details');
+            const editor = new MangaInfoEditor(repository, files, { Metadata: async () => {} } as unknown as ArchiveStorageController);
+            const draft = await editor.Read(row.seq); draft.metadata.title = 'Edited title'; draft.metadata.fields.Description = 'User story';
+            await editor.Save(row.seq, draft, true);
+            expect(JSON.parse(await readFile(path.join(folder, 'metadata.json'), 'utf8')).title).toBe('Edited title');
+            expect(await readFile(path.join(path.dirname(folder), '00 - Manga Details.html'), 'utf8')).toContain('User story');
+            await expect(editor.Save(row.seq, draft, true)).rejects.toThrow('Files changed');
+            await expect((await import('node:fs/promises')).readdir(folder).then(names => names.some(name => name.startsWith('backup-')))).resolves.toBe(true);
+
         } finally { repository.Close(); await rm(base, { recursive: true, force: true }); }
     });
 });

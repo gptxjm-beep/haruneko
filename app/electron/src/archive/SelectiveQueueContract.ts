@@ -16,7 +16,7 @@ export interface QueueManga extends SelectedManga {
     enqueueVersion?: number;
     historyCount?: number;
     existing?: { healthy: number; missing: number; review: number; at: number };
-    detailsState?: string;
+    detailsState?: string; detailsRevision?: number;
     state: QueueState; reason: string; sessionId: string | null; scope: QueueScope;
     inCurrentRun?: boolean;
     progress?: { registered: number; verified: number; bytes: number; chapter: string | null; storage: string | null; failed?: number; review?: number; pending?: number; selected?: number; available?: number };

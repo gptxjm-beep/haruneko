@@ -19,14 +19,14 @@ export function CoverExtension(bytes: Uint8Array): string | undefined {
 
 export class MangaDetailsFiles {
     constructor(private readonly repository: ArchiveRepository, private readonly storage: ArchiveStorageController) {}
-    private Context(seq: number) {
+    public Context(seq: number) {
         const row = this.repository.Queue.MetadataEntry(seq), session = this.repository.Session(row.session_id), settings = session.settings;
         const folder = [settings.useWebsiteSubDirectory ? SanitizeFileName(row.site_name) : '', SanitizeFileName(row.title), '00 - Manga Details'].filter(Boolean).join('/');
         return { row, session, folder, root: this.repository.VerifyRoot(String(session.root_id)), saved: JSON.parse(String(row.scope))._details ?? { files: [] } };
     }
     public async Inspect(seq: number): Promise<{ coverHealthy: boolean; state: string }> {
         const c = this.Context(seq); let coverHealthy = false;
-        for (const file of c.saved.files ?? []) if (/^cover\.(png|jpg|gif|webp|avif|bmp)$/.test(file.name)) {
+        for (const file of [...c.saved.files ?? []].reverse()) if ((!c.saved.coverName || file.name === c.saved.coverName) && /^(?:cover|cover-[a-f0-9-]+)\.(png|jpg|gif|webp|avif|bmp)$/.test(file.name)) {
             try { const current = await Fingerprint(c.root, `${c.folder}/${file.name}`); coverHealthy ||= current.sha256 === file.sha256 && current.size === file.size; } catch { /* Unknown files remain protected. */ }
         }
         return { coverHealthy, state: c.saved.state ?? 'Unavailable' };
@@ -54,14 +54,15 @@ export class MangaDetailsFiles {
         const write = async (name: string, bytes: Uint8Array) => {
             this.repository.VerifyRoot(String(c.session.root_id));
             await this.storage.Metadata(String(c.session.id), bytes.length);
-            const target = await ResolveArchivePath(c.root, `${c.folder}/${name}`, true);
+            const relative = name === '00 - Manga Details.html' ? `${c.folder.slice(0, -'/00 - Manga Details'.length)}/00 - Manga Details.html` : `${c.folder}/${name}`;
+            const target = await ResolveArchivePath(c.root, relative, true);
             const sha256 = createHash('sha256').update(bytes).digest('hex');
             try {
                 const file = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
                 try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
             } catch(error) {
                 if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-                const old = await Fingerprint(c.root, `${c.folder}/${name}`);
+                const old = await Fingerprint(c.root, relative);
                 if (old.sha256 !== sha256 || old.size !== bytes.length) { protectedOutput = true; return; }
             }
             this.repository.VerifyRoot(String(c.session.root_id));
@@ -79,14 +80,14 @@ export class MangaDetailsFiles {
             // Existing user-edited JSON remains authoritative; never silently replace it.
             try { const old = JSON.parse(await readFile(await ResolveArchivePath(c.root, `${c.folder}/metadata.json`), 'utf8')); if (old?.schema === 1 && old.fields) metadata = old; }
             catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') protectedOutput = true; }
-            try { await write('metadata.json', new TextEncoder().encode(JSON.stringify(metadata, null, 2))); await write('index.html', new TextEncoder().encode(RenderMangaMetadata(metadata))); } catch { protectedOutput = true; }
+            try { await write('metadata.json', new TextEncoder().encode(JSON.stringify(metadata, null, 2))); await write('00 - Manga Details.html', new TextEncoder().encode(RenderMangaMetadata(metadata, '00 - Manga Details/'))); } catch { protectedOutput = true; }
         }
         const state = files.length ? input.partial || protectedOutput ? 'Partial' : 'Saved' : 'Unavailable';
         this.repository.Queue.SaveDetails(seq, { state, files }); return state;
     }
     public async Cover(seq: number): Promise<{ bytes: Uint8Array; extension: string } | null> {
         const c = this.Context(seq);
-        for (const file of c.saved.files ?? []) if (/^cover\.(png|jpg|gif|webp|avif|bmp)$/.test(file.name) && file.size <= 8 * 1024 ** 2) {
+        for (const file of [...c.saved.files ?? []].reverse()) if ((!c.saved.coverName || file.name === c.saved.coverName) && /^(?:cover|cover-[a-f0-9-]+)\.(png|jpg|gif|webp|avif|bmp)$/.test(file.name) && file.size <= 8 * 1024 ** 2) {
             try {
                 const current = await Fingerprint(c.root, `${c.folder}/${file.name}`);
                 if (current.sha256 === file.sha256 && current.size === file.size) return { bytes: await readFile(await ResolveArchivePath(c.root, `${c.folder}/${file.name}`)), extension: file.name.split('.')[1] };

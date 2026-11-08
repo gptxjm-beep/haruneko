@@ -1,7 +1,9 @@
+import type { CartCommand } from './SelectionCartContract';
 import path from 'node:path';
 import { app, dialog, ipcMain, shell, nativeImage, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
-import { mkdir, open } from 'node:fs/promises';
+import { mkdir, open, stat, readFile } from 'node:fs/promises';
 import { CatalogLogs } from './CatalogLogs';
+import { MangaInfoEditor } from './MangaInfoEditor';
 import { MangaDetailsFiles } from './MangaDetailsFiles';
 import { ArchiveRepository } from './ArchiveRepository';
 import { ArchiveFiles } from './ArchiveFiles';
@@ -124,6 +126,23 @@ export class ArchiveIPC {
             }
         }
         if (command.operation.startsWith('archive-')) return this.repository.Work.Execute(command as ArchiveCoordinatorCommand);
+        if (command.operation === 'queue-info-cover') {
+            const picked = await dialog.showOpenDialog(this.window, { properties: ['openFile'], filters: [{ name: 'Cover image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }] });
+            if (picked.canceled || !picked.filePaths[0]) return null;
+            if ((await stat(picked.filePaths[0])).size > 8 * 1024 ** 2) throw new Error('Cover exceeds 8 MiB');
+            const bytes = await readFile(picked.filePaths[0]), image = nativeImage.createFromBuffer(bytes), size = image.getSize();
+            if (image.isEmpty() || size.width * size.height > 32000000) throw new Error('Cover is invalid or too large');
+            return new Uint8Array(image.toPNG());
+        }
+        if (['queue-open-folder', 'queue-info-read', 'queue-info-save'].includes(command.operation)) {
+            const editor = new MangaInfoEditor(this.repository, new MangaDetailsFiles(this.repository, this.storage), this.storage, bytes => { const image = nativeImage.createFromBuffer(Buffer.from(bytes)), size = image.getSize(); return !image.isEmpty() && size.width * size.height <= 32000000; });
+            if (command.operation === 'queue-open-folder') { const error = await shell.openPath(await editor.Folder(command.seq)); if (error) throw new Error('Cannot open manga folder'); return; }
+            if (command.operation === 'queue-info-read') return editor.Read(command.seq);
+            if (command.operation === 'queue-info-save') {
+                if (command.cover && (!(command.cover instanceof Uint8Array) || command.cover.length > 8 * 1024 ** 2 || nativeImage.createFromBuffer(Buffer.from(command.cover)).isEmpty())) throw new Error('Invalid cover');
+                return editor.Save(command.seq, command.draft, command.confirmed, command.cover);
+            }
+        }
         if (command.operation === 'queue-details-save') {
             if (command.cover) {
                 if (!(command.cover instanceof Uint8Array) || command.cover.length > 8 * 1024 ** 2) throw new Error('Invalid cover payload');
@@ -150,7 +169,7 @@ export class ArchiveIPC {
             this.repository.Queue.AuditResult(command.seq, results);
             return results.map(row => ({ id: row.id, localState: row.state }));
         }
-        if (command.operation.startsWith('cart-')) return this.repository.Cart.Execute(command as import('./SelectionCartContract').CartCommand);
+        if (command.operation.startsWith('cart-')) return this.repository.Cart.Execute(command as CartCommand);
         if (command.operation.startsWith('queue-')) return this.repository.Queue.Execute(command as SelectiveQueueCommand);
         switch (command.operation) {
             case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };
