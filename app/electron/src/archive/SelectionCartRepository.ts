@@ -82,6 +82,12 @@ export class SelectionCartRepository {
             if (before.chapters && chapters && JSON.stringify(before.chapters.map((chapter: { id: string }) => chapter.id)) !== JSON.stringify(chapters.map(chapter => chapter.id))) throw new Error('Source chapter identities changed; retain the saved selection and review');
             const available = new Set(chapters?.map(chapter => chapter.id));
             if (chapters && selection.ids.some(id => !available.has(id))) throw new Error('Selected identity is absent from the chapter snapshot');
+            // Unknown All is symbolic. Only an explicitly empty scope (or a known empty
+            // complement) means deselection; validate revisions and snapshots before removal.
+            if (selection.mode === 'selected' && !selection.ids.length || selection.mode === 'except' && chapters?.length && selection.ids.length === chapters.length) {
+                if (old) this.db.prepare('DELETE FROM hub_selections WHERE seq=?').run(old.seq);
+                return;
+            }
             this.db.prepare('INSERT OR IGNORE INTO hub_selections(site_id,manga_id,title,site_name) VALUES(?,?,?,?)').run(ref.siteId, ref.mangaId, ref.title, ref.siteName);
             const seq = this.db.prepare('SELECT seq FROM hub_selections WHERE site_id=? AND manga_id=?').get(ref.siteId, ref.mangaId)!.seq;
             this.db.prepare('INSERT INTO hub_selection_scopes(selection_seq,revision,value) VALUES(?,?,?) ON CONFLICT(selection_seq) DO UPDATE SET revision=excluded.revision,value=excluded.value')

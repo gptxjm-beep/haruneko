@@ -15,6 +15,24 @@ function fixture() {
     return { db, queue, cart: new SelectionCartRepository(db, queue) };
 }
 describe('Unified durable selection cart', () => {
+    it('Should remove known empty scopes atomically while retaining symbolic All before chapters are known', () => {
+        const f = fixture(); try {
+            for (const selection of [
+                { mode: 'selected' as const, ids: [], chapters: [{ id: 'one', title: 'One' }] },
+                { mode: 'except' as const, ids: ['one'], chapters: [{ id: 'one', title: 'One' }] },
+            ]) {
+                const current = (f.cart.Execute({ operation: 'cart-list' }) as CartSelection[])[0];
+                f.cart.Execute({ operation: 'cart-save', reference: ref, expectedRevision: current?.revision ?? 0, selection: { ...selection, order: 'source' } });
+                expect(f.cart.Execute({ operation: 'cart-list' })).toEqual([]);
+            }
+            f.cart.Execute({ operation: 'cart-save', reference: ref, expectedRevision: 0, selection: { mode: 'all', ids: [], order: 'source' } });
+            expect((f.cart.Execute({ operation: 'cart-list' }) as CartSelection[])[0].mode).toBe('all');
+            f.cart.Execute({ operation: 'cart-save', reference: ref, expectedRevision: 1, selection: { mode: 'all', ids: [], order: 'source', chapters: [] } });
+            expect((f.cart.Execute({ operation: 'cart-list' }) as CartSelection[])[0].mode).toBe('all');
+
+            expect(f.queue.Budget()).toEqual({ mangasUsed: 0, chaptersStarted: 0 });
+        } finally { f.db.close(); }
+    });
     it('Should migrate v10 selections intact, persist exclusions and reject stale source results without resetting queue budgets', () => {
         const f = fixture(); try {
             const first = (f.cart.Execute({ operation: 'cart-list' }) as CartSelection[])[0]; expect(first).toMatchObject({ ...ref, mode: 'all', revision: 0 });

@@ -17,10 +17,10 @@ export class SelectionCartController {
     public async Save(reference: MangaReference, selection: Pick<CartSelection, 'mode' | 'ids' | 'order' | 'direction' | 'chapters'>): Promise<void> {
         try { await this.Client.Request({ operation: 'cart-save', reference, selection, expectedRevision: this.Find(reference)?.revision ?? 0 }); } catch(error) { await this.Refresh().catch(() => {}); throw error; } await this.Refresh();
     }
-    public async Select(reference: MangaReference, selected: boolean, confirmed = false): Promise<void> {
+    public async Select(reference: MangaReference, selected: boolean, _confirmed = false): Promise<void> {
         const previous = this.Find(reference);
         if (selected) { if (!previous) await this.Save(reference, { mode: 'all', ids: [], order: 'source' }); }
-        else if (previous) { if (!confirmed) throw new Error('Confirm removal in Selection Cart'); await this.Client.Request({ operation: 'cart-remove', seq: previous.seq, expectedRevision: previous.revision, confirmed }); await this.Refresh(); }
+        else if (previous) { await this.Client.Request({ operation: 'cart-remove', seq: previous.seq, expectedRevision: previous.revision, confirmed: true }); await this.Refresh(); }
     }
     public async Supplement(item: CartSelection): Promise<void> {
         await this.Client.Request({ operation: 'cart-supplement', seq: item.seq, expectedRevision: item.revision, confirmed: true }); await this.Refresh();
@@ -40,6 +40,6 @@ export function CartCount(item: CartSelection): string {
     return `${total - (item.mode === 'except' ? item.ids.length : 0)}/${total}`;
 }
 
-export function CartPartial(item: CartSelection): boolean { return item.mode === 'except' ? item.ids.length > 0 : item.mode === 'selected' && ((item.chapterCount ?? item.chapters?.length) === undefined || item.ids.length < (item.chapterCount ?? item.chapters.length)); }
+export function CartPartial(item: CartSelection): boolean { const count = CartSelectedCount(item), total = item.chapterCount ?? item.chapters?.length; return count !== 0 && (count === undefined ? item.mode === 'except' && item.ids.length > 0 : total === undefined || count < total); }
 
 export function CartSelectedCount(item: CartSelection): number | undefined { if (item.mode === 'selected') return item.ids.length; const total = item.chapterCount ?? item.chapters?.length; return total === undefined ? undefined : total - (item.mode === 'except' ? item.ids.length : 0); }
