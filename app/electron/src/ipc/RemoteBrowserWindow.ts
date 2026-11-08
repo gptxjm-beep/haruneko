@@ -40,7 +40,7 @@ export class RemoteBrowserWindowController {
         const win = new BrowserWindow(windowOptions);
         win.autoHideMenuBar = true;
         win.setMenuBarVisibility(false);
-        win.webContents.debugger.attach('1.3');
+        try { win.webContents.debugger.attach('1.3'); } catch(error) { win.destroy(); throw error; }
         win.webContents.setWindowOpenHandler(() => { return { action: 'deny' }; });
         win.webContents.on('dom-ready', () => this.ipc.Send(Channels.RemoteBrowserWindowController.OnDomReady, win.id));
         win.webContents.on('did-start-navigation', event => this.ipc.Send(Channels.RemoteBrowserWindowController.OnBeforeNavigate, win.id, event.url, event.isMainFrame, event.isSameDocument));

@@ -1,3 +1,4 @@
+import { BindCatalogWindow } from '../catalog/CatalogVerification';
 import type { ISetting, ISettings, SettingsManager } from '../SettingsManager';
 import type { StorageController } from '../StorageController';
 import type { Tag } from '../Tags';
@@ -126,8 +127,8 @@ export abstract class MediaScraper<T extends MediaContainer<MediaChild>> {
 
     public abstract CreatePlugin(storageController: StorageController, settingsManager: SettingsManager): T;
 
-    public async Initialize(): Promise<void> {
-        const request = new Request(this.URI.href);
+    public async Initialize(owner?: AbortSignal): Promise<void> {
+        const request = BindCatalogWindow(new Request(this.URI.href, { signal: owner }), owner);
         return FetchWindowScript(request, '');
     }
 

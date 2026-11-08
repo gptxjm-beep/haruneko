@@ -1,6 +1,6 @@
 export interface CatalogEntry { id: string; title: string; aliases?: string[]; }
 export interface CatalogCoverage { state: 'complete' | 'partial' | 'unknown' | 'unsupported'; evidence: string; }
-export type IndexSiteState = 'queued' | 'updating' | 'succeeded' | 'failed' | 'stale' | 'cancelled' | 'review';
+export type IndexSiteState = 'queued' | 'updating' | 'succeeded' | 'failed' | 'stale' | 'cancelled' | 'review' | 'verification' | 'ready';
 export interface IndexSite {
     siteId: string; revision: number; count: number; lastSuccess: number | null; lastAttempt: number | null;
     state: IndexSiteState; error: string | null; coverage: CatalogCoverage; discovered: number | null;
@@ -8,7 +8,7 @@ export interface IndexSite {
 }
 export interface IndexJobItem { siteId: string; state: IndexSiteState; attempts: number; }
 export interface IndexJob {
-    key: 'arabic-sites'; id: string; state: 'running' | 'paused' | 'interrupted' | 'cancelled' | 'finished';
+    key: 'arabic-sites'; id: string; state: 'running' | 'paused' | 'interrupted' | 'cancelled' | 'finished' | 'waiting';
     items: IndexJobItem[]; current: string | null; updatedAt: number;
 }
 export interface IndexSnapshot { job: IndexJob | null; sites: IndexSite[]; }

@@ -1,3 +1,4 @@
+import { CatalogWindowContext, FetchManagedCatalogWindow } from '../catalog/CatalogVerification';
 import { RecordDiagnosticResponse } from '../ImageDiagnostics';
 import { RecordCatalogHTTP } from '../catalog/CatalogNetwork';
 import protobuf from 'protobufjs';
@@ -540,6 +541,8 @@ export abstract class FetchProvider {
      * @param timeout - The maximum time [ms] to wait for the result before a timeout error is thrown (excluding the {@link delay})
      */
     public async FetchWindowPreloadScript<T extends void | JSONElement>(request: Request, preload: string, script: string, delay = 0, timeout = 60_000): Promise<T> {
+        const context = CatalogWindowContext(request);
+        if (context) return FetchManagedCatalogWindow<T>(CreateRemoteBrowserWindow(), request, script, preload, delay, timeout, context);
 
         const invocations: {
             name: string;

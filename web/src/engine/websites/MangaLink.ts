@@ -1,3 +1,4 @@
+import { BindCatalogWindow } from '../catalog/CatalogVerification';
 import { Tags } from '../Tags';
 import icon from './MangaLink.webp';
 import { DecoratableMangaScraper } from '../providers/MangaPlugin';
@@ -26,7 +27,7 @@ export default class extends DecoratableMangaScraper {
         return icon;
     }
 
-    public override async Initialize(): Promise<void> {
-        return await FetchWindowScript(new Request(new URL('/manga/-/', this.URI)), '');
+    public override async Initialize(owner?: AbortSignal): Promise<void> {
+        return await FetchWindowScript(BindCatalogWindow(new Request(new URL('/manga/-/', this.URI), { signal: owner }), owner), '');
     }
 }

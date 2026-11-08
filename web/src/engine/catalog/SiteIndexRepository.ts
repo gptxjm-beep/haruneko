@@ -77,7 +77,7 @@ export class SiteIndexRepository {
     public async Resume(): Promise<IndexJob> {
         return Transaction([jobs, meta, Store.MediaLists, staging], async tx => {
             const job = await Job(tx);
-            if (!['paused', 'interrupted', 'running'].includes(job.state)) throw new IndexConflictError('This catalog job cannot resume');
+            if (!['paused', 'interrupted', 'running', 'waiting'].includes(job.state)) throw new IndexConflictError('This catalog job cannot resume');
             for (const item of job.items) if (item.state === 'updating') {
                 item.state = item.attempts >= 2 ? 'review' : 'queued';
                 const site = await Site(tx, item.siteId);
@@ -90,7 +90,9 @@ export class SiteIndexRepository {
     public async Interrupt(): Promise<void> {
         await Transaction([jobs, meta, Store.MediaLists], async tx => {
             const job = await RequestValue<IndexJob>(tx.objectStore(jobs).get('arabic-sites'));
-            if (job?.state !== 'running') return;
+            if (!job) return;
+            for (const item of job.items) if (item.state === 'ready') { item.state = 'verification'; const site = await Site(tx, item.siteId); tx.objectStore(meta).put({ ...site, state: 'verification', error: 'catalog-verification-recheck' }); }
+            if (job.state !== 'running') { tx.objectStore(jobs).put(job); return; }
             job.state = 'interrupted'; job.updatedAt = Date.now();
             for (const item of job.items) if (item.state === 'updating') {
                 const site = await Site(tx, item.siteId);
@@ -102,7 +104,7 @@ export class SiteIndexRepository {
     public async Begin(jobId: string, siteId: string): Promise<IndexAttempt> {
         return Transaction([jobs, meta, Store.MediaLists], async tx => {
             const job = await Job(tx, jobId), item = job.items.find(item => item.siteId === siteId);
-            if (job.state !== 'running' || !item || item.attempts >= 2 || item.state !== 'queued') throw new IndexConflictError('Site attempt is unavailable');
+            if (job.state !== 'running' || !item || item.attempts >= 2 || !['queued', 'ready'].includes(item.state)) throw new IndexConflictError('Site attempt is unavailable');
             const site = await Site(tx, siteId);
             item.state = 'updating'; item.attempts++; job.current = siteId; job.updatedAt = Date.now();
             tx.objectStore(jobs).put(job); tx.objectStore(meta).put({ ...site, state: 'updating', lastAttempt: Date.now(), discovered: null, error: null });
@@ -159,12 +161,27 @@ export class SiteIndexRepository {
         });
         NotifyCatalogChange(attempt.siteId);
     }
+    public async Defer(attempt: IndexAttempt): Promise<void> {
+        await Transaction([jobs, meta], async tx => {
+            const job = await Job(tx, attempt.jobId), item = job.items.find(item => item.siteId === attempt.siteId)!;
+            if (job.state !== 'running') throw new IndexConflictError('Update stopped');
+            item.state = 'verification'; item.attempts = Math.max(0, item.attempts - 1); job.current = null;
+            const site = await Site(tx, item.siteId); tx.objectStore(meta).put({ ...site, state: 'verification', error: 'catalog-verification-required' }); tx.objectStore(jobs).put(job);
+        }); NotifyCatalogChange(attempt.siteId);
+    }
+    public async VerificationReady(siteId: string): Promise<void> {
+        await Transaction([jobs, meta], async tx => {
+            const job = await Job(tx), item = job.items.find(item => item.siteId === siteId);
+            if (!item || item.state !== 'verification' || job.state === 'cancelled') return;
+            item.state = 'ready'; const site = await Site(tx, siteId); tx.objectStore(meta).put({ ...site, state: 'ready', error: null }); tx.objectStore(jobs).put(job);
+        }); NotifyCatalogChange(siteId);
+    }
     public async State(id: string, state: IndexJob['state']): Promise<void> {
         await Transaction([jobs, meta, Store.MediaLists, staging], async tx => {
             const job = await Job(tx, id);
             if (job.state === 'cancelled') return;
             job.state = state; job.current = null; job.updatedAt = Date.now();
-            if (state === 'paused' || state === 'cancelled') for (const item of job.items) if (['queued', 'updating'].includes(item.state)) {
+            if (state === 'paused' || state === 'cancelled') for (const item of job.items) if (['queued', 'updating', ...state === 'cancelled' ? ['verification', 'ready'] : []].includes(item.state)) {
                 if (item.state === 'updating') item.attempts = Math.max(0, item.attempts - 1); // User stop is not a connector failure.
                 item.state = state === 'cancelled' ? 'cancelled' : 'queued';
                 const site = await Site(tx, item.siteId); tx.objectStore(meta).put({ ...site, state: item.state });

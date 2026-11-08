@@ -1,3 +1,4 @@
+import { OwnCatalogWindows } from '../catalog/CatalogVerification';
 import type { MangaPlugin, Manga, Chapter } from '../providers/MangaPlugin';
 import { Tags } from '../Tags';
 import type { ArchiveEvidence, ArchiveWorkChapter } from '../../../../app/electron/src/archive/ArchiveCoordinatorProtocol';
@@ -45,6 +46,7 @@ export class EngineArchiveSource implements ArchiveSource {
         let wake = () => {}, finished = false, failure: unknown, observed = false;
         const owned = new AbortController();
         const combined = AbortSignal.any([signal, owned.signal]);
+        const releaseWindows = OwnCatalogWindows(this.site.URI.origin, combined);
         const unsubscribe = this.site.ObserveCatalogEntries?.((entries, status) => { observed = true; pages.push({ entries, status }); wake(); });
         let entries: readonly Manga[] = [];
         const fetching = this.site.FetchArchiveEntries(combined).then(value => { entries = value; }, error => { failure = error; }).finally(() => { finished = true; wake(); });
@@ -66,7 +68,7 @@ export class EngineArchiveSource implements ArchiveSource {
                 yield { items: entries.slice(offset, offset + 50).map(manga => ({ id: manga.Identifier, title: manga.Title })), terminal: offset + 50 >= entries.length,
                     coverage: { state: 'unknown', evidence: 'FetchMangas returns an array without a complete-index proof' } };
             }
-        } finally { unsubscribe?.(); owned.abort(); await fetching; }
+        } finally { unsubscribe?.(); owned.abort(); await fetching; releaseWindows(); }
     }
 
     public async Chapters(manga: Manga, signal: AbortSignal): Promise<ArchiveChapterManifest> {

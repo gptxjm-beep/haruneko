@@ -109,6 +109,7 @@ export class MangaPlugin extends MediaContainer<Manga> {
     private catalogHTTP?: number;
     public ObserveCatalogEntries(listener: (entries: readonly Manga[], status?: number) => void): () => void { this.catalogEntries.add(listener); return () => this.catalogEntries.delete(listener); }
     public ObserveCatalogProgress(listener: (count: number, status?: number) => void): () => void { this.catalogObservers.add(listener); return () => this.catalogObservers.delete(listener); }
+    public get CatalogHTTPStatus(): number | undefined { return this.catalogHTTP; }
     public TraceCatalog(request: Request): void { TraceCatalogRequest(request, status => { this.catalogHTTP = status; for (const listener of this.catalogObservers) listener(0, status); }); }
     public ReportCatalogProgress(count: number, entries?: readonly Manga[]): void {
         if (count > 0) { for (const listener of this.catalogObservers) listener(count); if (entries) for (const listener of this.catalogEntries) listener(entries, this.catalogHTTP); }
@@ -172,8 +173,8 @@ export class MangaPlugin extends MediaContainer<Manga> {
         return this.scraper.URI;
     }
 
-    public async Initialize(): Promise<void> {
-        await this.scraper.Initialize();
+    public async Initialize(owner?: AbortSignal): Promise<void> {
+        await this.scraper.Initialize(owner);
         return super.Initialize();
     }
 
@@ -200,7 +201,7 @@ export class MangaPlugin extends MediaContainer<Manga> {
 
     /** Archive discovery uses the engine scraper without writing an unbudgeted UI cache into IndexedDB. */
     public async FetchArchiveEntries(signal?: AbortSignal): Promise<Manga[]> {
-        await this.Initialize();
+        await this.Initialize(signal);
         return this.FetchCatalog(signal);
     }
 }

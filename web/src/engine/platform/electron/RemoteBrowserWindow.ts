@@ -46,6 +46,8 @@ export default class RemoteBrowserWindow implements IRemoteBrowserWindow {
         }
     }
 
+    private allocating: Promise<number> | undefined;
+
     public async Open(request: Request, show: boolean = false, preload: string = '') {
 
         const openOptions: BrowserWindowConstructorOptions = {
@@ -69,7 +71,8 @@ export default class RemoteBrowserWindow implements IRemoteBrowserWindow {
             openOptions.webPreferences.preload = preload;
         }
 
-        this.windowID = await this.ipc.Invoke(Channels.RemoteBrowserWindowController.OpenWindow, JSON.stringify(openOptions));
+        this.allocating = this.ipc.Invoke(Channels.RemoteBrowserWindowController.OpenWindow, JSON.stringify(openOptions));
+        this.windowID = await this.allocating;
 
         /*
         if(isNaN(this.windowID)) {
@@ -91,6 +94,7 @@ export default class RemoteBrowserWindow implements IRemoteBrowserWindow {
     }
 
     public async Close(): Promise<void> {
+        if (this.allocating) { try { this.windowID = await this.allocating; } catch { return; } }
         if(!Number.isNaN(this.windowID)) {
             return this.ipc.Invoke(Channels.RemoteBrowserWindowController.CloseWindow, this.windowID);
         }

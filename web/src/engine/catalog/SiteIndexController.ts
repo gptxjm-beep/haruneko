@@ -1,3 +1,4 @@
+import { ObserveCatalogVerification } from './CatalogVerification';
 import { MangaPlugin } from '../providers/MangaPlugin';
 import { EngineArchiveSource } from '../archive/ArchiveSource';
 import { Tags } from '../Tags';
@@ -7,9 +8,10 @@ import type { IndexSiteState, IndexJob } from './SiteIndexContract';
 import { ArchiveClient } from '../archive/ArchiveClient';
 
 export const IndexStateLabel: Record<IndexSiteState, string> = { queued: 'Queued', updating: 'Updating', succeeded: 'Catalog saved',
-    failed: 'Update failed', stale: 'Older catalog retained', cancelled: 'Cancelled', review: 'Needs review' };
-export const IndexJobStateLabel: Record<IndexJob['state'], string> = { running: 'Updating', paused: 'Paused', interrupted: 'Interrupted', cancelled: 'Cancelled', finished: 'Selected updates finished' };
+    failed: 'Update failed', stale: 'Older catalog retained', cancelled: 'Cancelled', review: 'Needs review', verification: 'Verification Required', ready: 'Ready to retry' };
+export const IndexJobStateLabel: Record<IndexJob['state'], string> = { running: 'Updating', paused: 'Paused', interrupted: 'Interrupted', cancelled: 'Cancelled', finished: 'Selected updates finished', waiting: 'Waiting for verification' };
 export function IndexErrorLabel(code: string): string {
+    if (code.startsWith('catalog-verification')) return 'Human verification required. Open Verify, then resume when ready.';
     if (code === 'catalog-window-timeout') return 'The connector browser window timed out before returning data. This is separate from catalog idle time; access may need manual review.';
     if (code.startsWith('catalog-needs-review')) return 'No usable observation or an ambiguous result. The previous catalog is safe.';
     if (code.startsWith('catalog-conflict')) return 'A newer catalog or job state was preserved.';
@@ -21,7 +23,7 @@ export function IndexErrorLabel(code: string): string {
 }
 export function ArabicCatalogSources(sites: readonly unknown[]) {
     return sites.filter((site): site is MangaPlugin => site instanceof MangaPlugin && site.Tags.Value.some(tag => tag.Category === Tags.Language.Arabic.Category && tag.Title === Tags.Language.Arabic.Title))
-        .map(site => ({ id: site.Identifier, name: site.Title, ObserveProgress: (listener: (count: number, status?: number) => void) => site.ObserveCatalogProgress(listener), Catalog: (signal: AbortSignal) => new EngineArchiveSource(site).Catalog(signal), Published: () => site.InvalidateMediaListCache() }));
+        .map(site => ({ id: site.Identifier, name: site.Title, ObserveVerification: (listener: (state: 'required' | 'blocked') => void) => ObserveCatalogVerification(site.URI.origin, listener), ObserveProgress: (listener: (count: number, status?: number) => void) => site.ObserveCatalogProgress(listener), Catalog: (signal: AbortSignal) => new EngineArchiveSource(site).Catalog(signal), Published: () => site.InvalidateMediaListCache() }));
 }
 let controller: SiteIndexManager | undefined;
 export function GetSiteIndexController(): SiteIndexManager {

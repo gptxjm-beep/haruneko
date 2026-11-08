@@ -1,3 +1,4 @@
+import { BindCatalogWindow } from '../catalog/CatalogVerification';
 import { Tags } from '../Tags';
 import icon from './Mangalek.webp';
 import { DecoratableMangaScraper } from '../providers/MangaPlugin';
@@ -20,8 +21,8 @@ export default class extends DecoratableMangaScraper {
         return icon;
     }
 
-    public override async Initialize(): Promise<void> {
+    public override async Initialize(owner?: AbortSignal): Promise<void> {
         //trigger Cloudflare at initialization
-        return await FetchWindowScript(new Request(new URL('/manga/-/', this.URI)), '');
+        return await FetchWindowScript(BindCatalogWindow(new Request(new URL('/manga/-/', this.URI), { signal: owner }), owner), '');
     }
 }

@@ -1,3 +1,4 @@
+import { FetchCatalogPage } from '../../catalog/CatalogPageRetry';
 // https://mangabooth.com/product/wp-manga-theme-madara/
 
 import { Delay } from '../../BackgroundTimers';
@@ -178,17 +179,14 @@ export async function FetchMangasMultiPageAJAX(this: MangaScraper, provider: Man
         provider.CatalogSignal?.throwIfAborted();
         form.set('page', `${page}`);
         const uri = new URL(path + '/wp-admin/admin-ajax.php', this.URI);
-        const request = new Request(uri.href, {
-            signal: provider.CatalogSignal,
-            method: 'POST',
-            body: form.toString(),
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': this.URI.href
-            }
-        });
-        provider.TraceCatalog(request);
-        const data = await FetchCSS<HTMLAnchorElement>(request, query);
+        const data = await FetchCatalogPage(async () => {
+            const request = new Request(uri.href, {
+                signal: provider.CatalogSignal, method: 'POST', body: form.toString(),
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': this.URI.href }
+            });
+            provider.TraceCatalog(request);
+            return FetchCSS<HTMLAnchorElement>(request, query);
+        }, () => provider.CatalogHTTPStatus, provider.CatalogSignal);
         const mangas = data.map(element => {
             const { id, title } = MangaInfoExtractor(element);
             return new Manga(this, provider, id, title.trim());

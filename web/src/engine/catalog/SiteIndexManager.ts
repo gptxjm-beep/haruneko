@@ -1,3 +1,4 @@
+import { CatalogVerificationRequired } from './CatalogVerification';
 import { Observable } from '../Observable';
 import { IndexConflictError, IndexReviewError, IndexStorageError, UnknownCoverage, type IndexSnapshot, type CatalogCoverage, type IndexAttempt, type CatalogEntry } from './SiteIndexContract';
 import type { SiteIndexRepository } from './SiteIndexRepository';
@@ -7,6 +8,7 @@ export interface CatalogSource {
     name?: string;
     ObserveProgress?(listener: (count: number, status?: number) => void): () => void;
     Catalog(signal: AbortSignal): AsyncIterable<{ items: readonly CatalogEntry[]; terminal: boolean; coverage: CatalogCoverage; httpStatus?: number }>;
+    ObserveVerification?(listener: (state: 'required' | 'blocked') => void): () => void;
     Published?(): void;
 }
 export interface CatalogLock {
@@ -46,6 +48,7 @@ export class SiteIndexManager {
     private pending: Promise<unknown> | undefined;
     private settled = true;
     private iterator: AsyncIterator<unknown> | undefined;
+    private recovered = false;
     private initializing: Promise<void> | undefined;
     private lastNotification = 0;
     private phase = 'connector-fetch';
@@ -60,7 +63,7 @@ export class SiteIndexManager {
     }
     private async InitializeOnce(): Promise<void> {
         if (!this.locks) { this.Activity.Value = { owned: false, draining: false, error: 'Catalog locking is unavailable in this environment' }; await this.Refresh(); return; }
-        await this.locks.request('haruneko-site-index', { ifAvailable: true }, async lock => { if (lock) await this.Repository.Interrupt(); });
+        await this.locks.request('haruneko-site-index', { ifAvailable: true }, async lock => { if (lock && !this.recovered) { await this.Repository.Interrupt(); this.recovered = true; } });
         await this.Refresh();
     }
     public Start(siteId?: string): Promise<void> { return this.Open(false, siteId); }
@@ -94,7 +97,7 @@ export class SiteIndexManager {
                     if (!resume && !ids.length) throw new IndexConflictError('The selected Arabic manga connector is unavailable');
                     const previous = await this.Repository.Snapshot();
                     const job = resume ? await this.Repository.Resume() : await this.Repository.Start(ids);
-                    this.id = job.id; await this.Refresh(); ready = true; resolve();
+                    this.recovered = true; this.id = job.id; await this.Refresh(); ready = true; resolve();
                     this.Log({ event: resume ? 'resume' : 'begin', type: 'full-refresh', scope: siteId ? 'single' : 'bulk', sites: job.items.length });
                     for (const item of job.items) this.Log({ event: 'previous-index', siteId: item.siteId, index: previous.sites.find(site => site.siteId === item.siteId) ?? { state: 'untracked', lastSuccess: null } });
                     await this.Run();
@@ -116,8 +119,8 @@ export class SiteIndexManager {
     private async Run(): Promise<void> {
         while (!this.stop.signal.aborted) {
             const job = (await this.Repository.Snapshot()).job!;
-            const item = job.items.find(item => item.state === 'queued');
-            if (!item) { await this.Repository.State(job.id, 'finished'); await this.Refresh(); return; }
+            const item = job.items.find(item => item.state === 'queued') ?? job.items.find(item => item.state === 'ready');
+            if (!item) { await this.Repository.State(job.id, job.items.some(item => item.state === 'verification') ? 'waiting' : 'finished'); await this.Refresh(); return; }
             const attempt = await this.Repository.Begin(job.id, item.siteId); await this.Refresh();
             const source = this.sources().find(source => source.id === item.siteId);
             const started = Date.now(); let observed = 0, lastProgressLog = 0, lastHTTP: number | null = null;
@@ -129,6 +132,11 @@ export class SiteIndexManager {
             let timeout: ReturnType<typeof setTimeout>;
             const resetDeadline = (initial = false) => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(new DOMException('Catalog idle deadline exceeded', 'TimeoutError')), initial ? this.policy.initialTimeoutMs ?? this.policy.timeoutMs : this.policy.timeoutMs); };
             resetDeadline(true);
+            const verification = source?.ObserveVerification?.(state => {
+                this.Log({ event: 'verification', siteId: item.siteId, stage: state });
+                clearTimeout(timeout);
+                timeout = setTimeout(() => controller.abort(new DOMException('Verification window is still settling', 'TimeoutError')), state === 'required' ? 65000 : 1);
+            });
             const maximum = setTimeout(() => controller.abort(new DOMException('Catalog maximum duration exceeded', 'TimeoutError')), 30 * 60_000);
             const unsubscribe = source?.ObserveProgress?.((count, status) => {
                 if (Number.isInteger(status) && status >= 100 && status <= 599) lastHTTP = status;
@@ -149,7 +157,8 @@ export class SiteIndexManager {
                 this.Log({ event: 'attempt-success', siteId: item.siteId, elapsedMs: Date.now() - started, httpStatus: lastHTTP, result: (await this.Repository.Snapshot()).sites.find(site => site.siteId === item.siteId) });
             } catch(error) {
                 if (this.stop.signal.aborted) { await this.Repository.State(job.id, this.requested ?? 'paused'); await this.Refresh(); return; }
-                const failure = lastHTTP !== null && [401, 403, 429].includes(lastHTTP) ? { code: 'catalog-access-or-capability-unavailable', review: true, retry: false } : Failure(error);
+                const verificationNeeded = error instanceof CatalogVerificationRequired;
+                const failure = verificationNeeded ? { code: 'catalog-verification-required', review: true, retry: false } : lastHTTP !== null && [401, 403, 429].includes(lastHTTP) ? { code: 'catalog-access-or-capability-unavailable', review: true, retry: false } : Failure(error);
                 const name = String((error as Error)?.name ?? 'Error');
                 const http = /(?:HTTP|status|response)\D{0,12}([1-5][0-9]{2})/i.exec(String((error as Error)?.message ?? ''))?.[1];
                 this.Log({ event: 'attempt-failure', siteId: item.siteId, elapsedMs: Date.now() - started, stage: this.phase, code: failure.code,
@@ -164,7 +173,8 @@ export class SiteIndexManager {
                         this.Log({ event: 'partial-retained', siteId: item.siteId, count: candidate.length, httpStatus: lastHTTP, code: failure.code });
                     }
                 }
-                if (!retained) await this.Repository.Result(attempt, failure.code, failure.review, failure.retry);
+                if (verificationNeeded) await this.Repository.Defer(attempt);
+                else if (!retained) await this.Repository.Result(attempt, failure.code, failure.review, failure.retry);
                 if (!this.settled) {
                     // Wait conservatively without blocking UI controls. Continue the requested batch only
                     // once the old transport settles; a deliberate user stop must never auto-resume.
@@ -177,7 +187,7 @@ export class SiteIndexManager {
                     this.Activity.Value = { ...this.Activity.Value, draining: false };
                 }
             } finally {
-                clearTimeout(timeout); clearTimeout(maximum); unsubscribe?.(); this.stop.signal.removeEventListener('abort', abort);
+                clearTimeout(timeout); clearTimeout(maximum); unsubscribe?.(); verification?.(); this.stop.signal.removeEventListener('abort', abort);
                 if (this.settled) { try { await this.iterator?.return?.(); } catch { /* Original error is recorded separately. */ } this.iterator = undefined; }
             }
             await this.Refresh();
