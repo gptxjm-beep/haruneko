@@ -8,7 +8,13 @@
     import { Store as UI } from '../../stores/Stores.svelte';
     import Result from './SearchResult.svelte';
     import { GetSelectiveQueueController, QueueSupported, QueueIdentity } from '../../../../engine/archive/SelectiveQueueController';
-    import PersonalQueue from './PersonalQueue.svelte';
+    import SelectionCart from './SelectionCart.svelte';
+    import { GetSelectionCart, CartPartial } from '../../../../engine/archive/SelectionCartController';
+    const cart = GetSelectionCart();
+    let cartView = $state(cart.State.Value), multi = $state(false), remove = $state<any>();
+    const cartObserver = value => { cartView = value; };
+    cart.State.Subscribe(cartObserver); onDestroy(() => cart.State.Unsubscribe(cartObserver));
+    onMount(() => { void cart.Refresh().catch(error => queue.Error(error)); });
     let showSelections = $state(false);
     $effect(() => { if (UI.hubSection === 'selections') showSelections = true; });
 
@@ -19,7 +25,8 @@
     queue.State.Subscribe(queueObserver);
     const reference = (row: SearchRow) => ({ siteId: row.siteId, mangaId: row.mangaId, title: row.title, siteName: controller.Sites().find(site => site.id === row.siteId)?.title ?? row.siteId });
     async function queueAction(action: () => Promise<void>) { try { await action(); } catch(error) { queue.Error(error); } }
-    $effect(() => { if (view.result && QueueSupported()) void queueAction(() => queue.Flags(view.result!.groups.flatMap(group => group.rows.map(reference)))); });
+    let cartCount = $derived(cartView.items.length);
+    $effect(() => { cartCount; if (view.result && QueueSupported()) void queueAction(() => queue.Flags(view.result!.groups.flatMap(group => group.rows.map(reference)))); });
     let view = $state(controller.State.Value);
     let loaded = $state(false), opening = $state(false), openingError = $state('');
     let panel: HTMLDivElement = $state();
@@ -58,13 +65,14 @@
 <section aria-labelledby="shared-search-title" data-testid="shared-search">
     <h2 id="shared-search-title">Search saved catalogs</h2>
     {#if QueueSupported()}
+        <label class="multi"><input type="checkbox" bind:checked={multi} />Multi-select</label>
         <p data-testid="selection-total">Selected: {queueView.summary?.selected ?? 0} • In downloads: {queueView.summary?.queued ?? 0}</p>
         <Button kind="ghost" size="small" aria-expanded={showSelections} onclick={() => showSelections = !showSelections}>Saved selections ({queueView.summary?.selected ?? 0})</Button>
-        <Button kind="secondary" onclick={() => queueAction(() => queue.Add())}>Add Selected to Queue</Button>
+        <Button kind="secondary" onclick={() => queueAction(() => cart.Transfer())}>Add Selected to Downloads</Button>
         {#if queueView.message}<p role="status">{queueView.message}</p>{/if}
         {#if queueView.error}<p role="alert">{queueView.error}</p>{/if}
     {:else}<p>Selections and downloads require Electron. Local search is available.</p>{/if}
-    <p class="intro">Search uses saved catalogs only. Opening a manga uses its original connector; adding it to downloads does not start it.</p>
+    {#if remove}<p role="alert">Remove this manga and its chapter selection?</p><button onclick={() => queueAction(async () => { await cart.Select(remove, false, true); remove = undefined; })}>Confirm removal</button><button onclick={() => remove = undefined}>Keep selection</button>{/if}
     <div class="filters">
         <label>Manga title<input data-testid="shared-search-query" type="search" maxlength="256" value={view.preference.query} disabled={!loaded} oninput={event => change({ query: event.currentTarget.value })} placeholder="Search an English or Arabic title" /></label>
         <label>Source<select data-testid="shared-search-site" value={view.preference.siteId} disabled={!loaded} onchange={event => change({ siteId: event.currentTarget.value })}>
@@ -76,7 +84,7 @@
     <details class="advanced"><summary>Advanced search</summary>
         <label class="fuzzy" title="Allow one or two spelling edits; no alternate titles are invented."><input data-testid="shared-search-fuzzy" type="checkbox" checked={view.preference.fuzzy} disabled={!loaded} onchange={event => change({ fuzzy: event.currentTarget.checked })} />Approximate title matching</label>
     </details>
-    {#if showSelections}<div class="selection-panel"><PersonalQueue selections /></div>{/if}
+    {#if showSelections}<div class="selection-panel"><SelectionCart /></div>{/if}
     {#if view.status === 'searching'}<p role="status">Searching local catalogs…</p>{/if}
     {#if view.error}<p role="alert">{view.error}</p><Button kind="secondary" onclick={async () => { await controller.Initialize(); controller.Query({}, 0); }}>Retry local search</Button>{/if}
     {#if openingError}<p role="alert">{openingError}</p>{/if}
@@ -92,7 +100,7 @@
                         {#if group.metadata.coverage.state !== 'complete'}<p class="warning">Unconfirmed coverage: {group.metadata.coverage.state}</p>{/if}
                         <details><summary>Catalog details</summary><p>Coverage details: {group.metadata.coverage.evidence} — This does not certify image downloads or chapter completeness.</p></details>
                     </header>
-                    {#each group.rows as row (JSON.stringify([row.siteId, row.mangaId]))}<Result {row} disabled={opening} onopen={open} queueSupported={QueueSupported()} selected={!!queueView.flags[QueueIdentity(row)]} queued={!!queueView.queued[QueueIdentity(row)]} onselect={(item, selected) => queueAction(() => queue.Select(reference(item), selected))} onadd={item => queueAction(() => queue.Add(reference(item)))} />{/each}
+                    {#each group.rows as row (JSON.stringify([row.siteId, row.mangaId]))}<Result {row} {multi} disabled={opening} onopen={open} queueSupported={QueueSupported()} selected={cartView.items.some(item => QueueIdentity(item) === QueueIdentity(row))} partial={cartView.items.some(item => QueueIdentity(item) === QueueIdentity(row) && CartPartial(item))} queued={!!queueView.queued[QueueIdentity(row)]} onselect={(item, selected) => { if (!selected) remove = reference(item); else void queueAction(() => cart.Select(reference(item), true)); }} onadd={item => queueAction(() => queue.Add(reference(item)))} />{/each}
                     {#if !group.rows.length}<small>More results from this source are on other pages.</small>{/if}
                 </section>
             {/each}
@@ -106,7 +114,7 @@
     {/if}
 </section>
 <style>
-    h2 { font-size: 1.15rem; margin: 1rem 0; } .intro, p { line-height: 1.6; margin: .65rem 0; }
+    h2 { font-size: 1.15rem; margin: 1rem 0; } p { line-height: 1.6; margin: .65rem 0; }
     .filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
     label { display: grid; gap: .5rem; flex: 1 1 15rem; } input, select { background: var(--cds-field-01); color: var(--cds-text-01); border: 1px solid var(--cds-ui-03); font: inherit; padding: .55rem; width: 100%; min-width: 0; }
     label.fuzzy { display: flex; align-items: center; } .fuzzy input { width: auto; }

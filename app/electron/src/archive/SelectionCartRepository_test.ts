@@ -39,6 +39,13 @@ describe('Unified durable selection cart', () => {
             expect(f.cart.Execute({ operation: 'cart-transfer' })).toEqual({ added: 1, existing: 0, review: 1 });
             expect((f.cart.Execute({ operation: 'cart-list' }) as CartSelection[]).map(item => item.siteId)).toEqual(['a']);
             expect(f.queue.Execute({ operation: 'queue-list' })).toHaveLength(2); expect(f.queue.Budget().chaptersStarted).toBe(0);
+            const retained = (f.cart.Execute({ operation: 'cart-list' }) as CartSelection[])[0];
+            expect(retained.reason).toContain('different scope');
+            f.cart.Execute({ operation: 'cart-supplement', seq: retained.seq, expectedRevision: retained.revision, confirmed: true });
+            expect(f.cart.Execute({ operation: 'cart-list' })).toEqual([]);
+            expect(f.queue.Execute({ operation: 'queue-list' })[0].scope.ids).toEqual(['two']);
+            expect(f.queue.Budget()).toEqual({ mangasUsed: 0, chaptersStarted: 0 });
+
         } finally { f.db.close(); }
     });
 });

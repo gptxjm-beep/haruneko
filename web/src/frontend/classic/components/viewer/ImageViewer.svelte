@@ -6,6 +6,7 @@
 
     interface Props {
         item: MediaContainer<MediaItem>;
+        nextItem?: MediaContainer<MediaItem>;
         currentImageIndex: number;
         wide: boolean;
         onNextItem: () => void;
@@ -25,7 +26,6 @@
     import Image from './Image.svelte';
     // stores
     import { Key, Settings } from '../../stores/Settings.svelte';
-    import { Store as UI } from '../../stores/Stores.svelte';
     // others
     import { scrollSmoothly, scrollMagic, toggleFullScreen } from './utilities';
     import { dragscroll } from '@svelte-put/dragscroll';
@@ -39,7 +39,7 @@
         viewer?.removeEventListener('scroll', onScroll);
     });
 
-    let { item, currentImageIndex, wide = $bindable(), onNextItem, onPreviousItem, onClose }: Props = $props();
+    let { item, nextItem, currentImageIndex, wide = $bindable(), onNextItem, onPreviousItem, onClose }: Props = $props();
     let entries = $derived(item.Entries.Value);
     let viewer: HTMLElement;
 
@@ -117,7 +117,7 @@
     // Auto next item after reaching end of page
     let autoNextItem = $state(false);
     async function onNextItemCallback() {
-        if (autoNextItem && UI.selectedItemNext) onNextItem();
+        if (autoNextItem && nextItem) onNextItem();
         else {
             autoNextItem = true;
             setTimeout(function () {
@@ -143,7 +143,7 @@
     function onImageLoaded() {
         loadedImageCount++;
         if (entries.length > 0 && loadedImageCount === entries.length) {
-            if (UI.selectedItemNext && Settings.ViewerPreloadNextItem.Value) preloadItem(UI.selectedItemNext);
+            if (nextItem && Settings.ViewerPreloadNextItem.Value) preloadItem(nextItem);
         }
     }
 
@@ -236,7 +236,7 @@
         </button>
     {/each}
 </div>
-{#if autoNextItem && UI.selectedItemNext !== undefined}
+{#if autoNextItem && nextItem !== undefined}
     <div  style="z-index: 20000; position: fixed; bottom: 2em; right: 2em;" transition:fade>
         <InlineNotification
             kind="info"

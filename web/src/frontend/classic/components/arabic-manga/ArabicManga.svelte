@@ -4,6 +4,8 @@
     import { FilterHubSites, IsMultilingual, OpenPlugin, SiteObservation, type SiteScope } from '../../models/PluginPresentation';
     import { Store as UI } from '../../stores/Stores.svelte';
     import { GetSiteIndexController, ArabicCatalogSources, IndexStateLabel, IndexJobStateLabel, IndexErrorLabel } from '../../../../engine/catalog/SiteIndexController';
+    import { VerifySite, CloseVerification } from '../../../../engine/catalog/VerifySite';
+    import LibraryExplorer from './LibraryExplorer.svelte';
     import SharedSearch from './SharedSearch.svelte';
     import PersonalQueue from './PersonalQueue.svelte';
     import { GetLocalSearchController } from '../../../../engine/search/LocalSearchController';
@@ -11,7 +13,7 @@
     import { ArchiveClient } from '../../../../engine/archive/ArchiveClient';
 
     let heading: HTMLHeadingElement;
-    async function chooseSection(section: 'sites' | 'search' | 'selections' | 'queue') { UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
+    async function chooseSection(section: 'sites' | 'search' | 'selections' | 'explorer' | 'queue') { UI.hubSection = section; await searcher.Initialize(); searcher.SetActive(section === 'search'); }
     const indexer = GetSiteIndexController();
     const searcher = GetLocalSearchController();
     let index = $state(indexer.State.Value);
@@ -32,10 +34,10 @@
         try {
             if (action === 'start') await indexer.Start(siteId);
             else if (action === 'resume') await indexer.Resume();
-            else await indexer.Stop(action === 'cancel');
+            else { await indexer.Stop(action === 'cancel'); if (action === 'cancel') await CloseVerification(); }
         } catch { actionError = 'Cannot start this update. Resume or cancel the existing job first, or check local storage access.'; }
     }
-    let completed = $derived(index.job?.items.filter(item => !['queued', 'updating'].includes(item.state)).length ?? 0);
+    let completed = $derived(index.job?.items.filter(item => !['queued', 'updating', 'verification', 'ready'].includes(item.state)).length ?? 0);
     let eligible = $derived(new Set(ArabicCatalogSources(HakuNeko.PluginController.WebsitePlugins).map(source => source.id)));
     let summaries = $derived(new Map(index.sites.map(site => [site.siteId, site])));
     let query = $state('');
@@ -51,8 +53,9 @@
 <section id="ArabicManga" lang="en" dir="ltr" aria-labelledby="arabic-manga-title" data-testid="arabic-manga-hub">
     <header class="hub-heading"><div><h1 id="arabic-manga-title" tabindex="-1" bind:this={heading}>Arabic Manga</h1><p>Your saved Arabic manga catalogs</p></div><Button kind="ghost" size="small" onclick={() => (UI.page = 'media')}>Back to Media List</Button></header>
     <nav aria-label="Arabic Manga sections">
-        <button aria-current={['search','selections'].includes(UI.hubSection) ? 'page' : undefined} onclick={() => chooseSection('search')}>Search</button>
         <button aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>Sites</button>
+        <button aria-current={['search','selections'].includes(UI.hubSection) ? 'page' : undefined} onclick={() => chooseSection('search')}>Search</button>
+        <button aria-current={UI.hubSection === 'explorer' ? 'page' : undefined} onclick={() => chooseSection('explorer')}>Explorer</button>
         <button aria-current={UI.hubSection === 'queue' ? 'page' : undefined} onclick={() => chooseSection('queue')}>Downloads</button>
     </nav>
     <div class="update-bar" data-testid="catalog-controls">
@@ -73,8 +76,10 @@
         <SharedSearch />
     {:else if UI.hubSection === 'queue'}
         <PersonalQueue />
-    {:else}
+    {:else if UI.hubSection === 'sites'}
         {#if globalThis.ipcRenderer?.invoke}<Button kind="ghost" size="small" onclick={openLogs}>Open Logs</Button>{/if}
+        {#if index.job?.items.some(item => ['verification','ready'].includes(item.state))}<details class="verification"><summary>Verification Required ({index.job.items.filter(item => ['verification','ready'].includes(item.state)).length})</summary>
+        {#each index.job.items.filter(item => ['verification','ready'].includes(item.state)) as item (item.siteId)}<p>{HakuNeko.PluginController.WebsitePlugins.find(site => site.Identifier === item.siteId)?.Title ?? item.siteId} · {IndexStateLabel[item.state]} <button onclick={async () => { try { await VerifySite(item.siteId); } catch { actionError = 'Cannot open verification. Close the current window and retry.'; } }}>Verify</button></p>{/each}<button onclick={async () => { try { await CloseVerification(); } catch { actionError = 'Verification window is still closing'; } }}>Close verification window</button></details>{/if}
         <div class="filters"><label>Find a site<input type="search" data-testid="arabic-site-filter" bind:value={query} placeholder="Name, ID or host" /></label>
             <label>Language support<select bind:value={scope} data-testid="arabic-site-scope"><option value="arabic">Explicit Arabic support</option><option value="multilingual-unconfirmed">Multilingual — Arabic unconfirmed</option></select></label></div>
         <div class="preference"><PluginOrder english /><small>Language tags identify sources; catalog availability does not certify image downloads.</small></div>
@@ -87,7 +92,7 @@
                 <div class="card-title"><h2 dir="auto">{site.Title}</h2><span class:available={!!saved?.count} class="badge">{saved?.count ? 'Searchable' : saved ? 'No saved library' : 'Not checked'}</span></div>
                 <p class="host" dir="ltr">{site.URI.hostname}</p>
                 {#if scope === 'multilingual-unconfirmed'}<small class="pending">Arabic unconfirmed</small>{/if}
-                <div data-testid="catalog-site-state" class="stats"><strong>{saved?.count ?? '—'} saved manga</strong><span class:error={saved && ['failed','stale'].includes(saved.state)} class:pending={saved && ['updating','review'].includes(saved.state)}>{saved ? IndexStateLabel[saved.state] : 'No update recorded'}</span></div>
+                <div data-testid="catalog-site-state" class="stats"><strong>{saved?.count ?? '—'} saved manga</strong><span class:error={saved && ['failed','stale'].includes(saved.state)} class:pending={saved && ['updating','review','verification','ready'].includes(saved.state)}>{saved ? IndexStateLabel[saved.state] : 'No update recorded'}</span></div>
                 <p class="muted">Last saved update: {saved?.lastSuccess ? new Date(saved.lastSuccess).toLocaleString() : 'Not recorded'}</p>
                 {#if saved?.coverage.state !== 'complete'}<small class="pending">Source coverage unconfirmed; saved entries remain searchable.</small>{/if}
                 {#if saved?.error}<small class="error">{IndexErrorLabel(saved.error)}</small>{/if}
@@ -100,6 +105,7 @@
         </div>
         <div class="pagination"><Button size="small" kind="ghost" disabled={page <= 1} onclick={() => page--}>Previous</Button><span>{page}/{pages}</span><Button size="small" kind="ghost" disabled={page >= pages} onclick={() => page++}>Next</Button></div>
     {/if}
+    <div hidden={UI.hubSection !== 'explorer'}><LibraryExplorer /></div>
     <aside>Experimental archiving: 5 manga, 20 chapter attempts, at least 50 GiB free-space reserve. Catalog updates fetch titles only.</aside>
 </section>
 <style>

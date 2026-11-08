@@ -1,13 +1,13 @@
 <script lang="ts">
     import { Button } from 'carbon-components-svelte';
     import type { SearchRow } from '../../../../engine/search/LocalSearch';
-    let { row, disabled = false, onopen, selected = false, queued = false, onselect, onadd, queueSupported = false }: { row: SearchRow; disabled?: boolean; onopen: (row: SearchRow) => void; selected?: boolean; queued?: boolean; onselect?: (row: SearchRow, selected: boolean) => void; onadd?: (row: SearchRow) => void; queueSupported?: boolean } = $props();
+    let { row, disabled = false, onopen, selected = false, queued = false, onselect, onadd, queueSupported = false, multi = false, partial = false }: { row: SearchRow; disabled?: boolean; onopen: (row: SearchRow) => void; selected?: boolean; queued?: boolean; onselect?: (row: SearchRow, selected: boolean) => void; onadd?: (row: SearchRow) => void; queueSupported?: boolean; multi?: boolean; partial?: boolean } = $props();
 </script>
 <article data-testid="shared-search-result" data-site-id={row.siteId} data-manga-id={row.mangaId}>
-    <label><input type="checkbox" aria-label={`Select ${row.title}`} checked={selected} disabled={!queueSupported} onchange={event => onselect?.(row, event.currentTarget.checked)} />Select (separate from favorites)</label>
+    {#if multi}<label><input type="checkbox" aria-label={`Select ${row.title}`} checked={selected} indeterminate={partial} disabled={!queueSupported} onchange={event => { const next = event.currentTarget.checked; event.currentTarget.checked = selected; onselect?.(row, next); }} />Select</label>{/if}
     <div><h3 dir="auto">{row.title}</h3><details><summary>Source details</summary><p dir="auto">Source ID: <bdi>{row.mangaId}</bdi></p></details></div>
     {#if queued}<p>Added to downloads</p>{/if}
-    <Button kind="secondary" size="small" {disabled} onclick={() => onopen(row)}>Open manga</Button>
+    <Button kind="secondary" size="small" {disabled} onclick={() => onopen(row)}>Open Manga</Button>
     <Button kind="secondary" size="small" disabled={!queueSupported} onclick={() => onadd?.(row)}>Add to Queue</Button>
 </article>
 <style>

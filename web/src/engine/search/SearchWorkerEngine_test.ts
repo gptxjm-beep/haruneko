@@ -16,6 +16,12 @@ function fixture() {
     return { engine, lists, versions, rebuilt, search, makeStale() { stale = true; } };
 }
 describe('Revision-aware worker search over accepted catalogs', () => {
+    it('Should browse only the requested saved site with the same engine and preserve ordinary empty-search semantics', async () => {
+        const f = fixture();
+        const browsed = await f.engine.Search({ query: '', page: 1, siteId: 'a', fuzzy: false, browse: true }, [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }]);
+        expect(browsed.total).toBe(2); expect(browsed.groups.flatMap(group => group.rows).every(row => row.siteId === 'a')).toBe(true);
+        expect((await f.search('')).total).toBe(0);
+    });
     it('Should rank an exact title in a later source above fuzzy matches and search explicit aliases without merging identities', async () => {
         const f = fixture();
         f.lists.set('a', Array.from({ length: 30 }, (_, n) => ({ id: String(n), title: 'One Pieca' })));

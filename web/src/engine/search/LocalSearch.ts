@@ -1,7 +1,7 @@
 import type { IndexSite } from '../catalog/SiteIndexContract';
 
 export interface SearchSite { id: string; title: string; }
-export interface SearchParameters { query: string; siteId: string; fuzzy: boolean; page: number; }
+export interface SearchParameters { query: string; siteId: string; fuzzy: boolean; page: number; browse?: boolean; }
 export interface SearchRow { siteId: string; mangaId: string; title: string; score: number; }
 export interface SearchGroup { site: SearchSite; count: number; metadata: IndexSite; rows: SearchRow[]; }
 export interface SearchResult {

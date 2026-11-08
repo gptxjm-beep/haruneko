@@ -22,14 +22,14 @@ export class LocalSearchController {
     private timer: ReturnType<typeof setTimeout> | undefined;
     private serial = 0;
     private channel: BroadcastChannel | undefined;
-    constructor(private readonly storage: StorageController, public readonly Client: SearchWorkerClient, public readonly Sites: () => SearchSite[]) {
+    constructor(private readonly storage: StorageController, public readonly Client: SearchWorkerClient, public readonly Sites: () => SearchSite[], private readonly preferenceKey = SearchPreferenceKey, private readonly browse = false) {
         if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
             this.channel = new BroadcastChannel('haruneko-catalog');
             this.channel.onmessage = () => { if (this.State.Value.preference.query.trim()) this.Query({}, 100); };
         }
     }
     public Initialize(): Promise<void> {
-        return this.initialized ??= this.storage.LoadPersistent<SearchPreference>(Store.Settings, SearchPreferenceKey).then(value => {
+        return this.initialized ??= this.storage.LoadPersistent<SearchPreference>(Store.Settings, this.preferenceKey).then(value => {
             this.persistenceReady = true;
             this.State.Value = { ...this.State.Value, preference: ValidSearchPreference({ ...value, ...this.edits }) };
             if (Object.keys(this.edits).length) this.Save();
@@ -38,7 +38,7 @@ export class LocalSearchController {
     private Save(): void {
         if (!this.persistenceReady) return;
         const preference = { ...this.State.Value.preference };
-        this.saves = this.saves.catch(() => {}).then(() => this.storage.SavePersistent(preference, Store.Settings, SearchPreferenceKey));
+        this.saves = this.saves.catch(() => {}).then(() => this.storage.SavePersistent(preference, Store.Settings, this.preferenceKey));
         void this.saves.catch(() => { this.State.Value = { ...this.State.Value, error: 'Cannot save the search position. Local results were not deleted.' }; });
     }
     public async Flush(): Promise<void> { await this.saves; }
@@ -48,14 +48,14 @@ export class LocalSearchController {
         Object.assign(this.edits, change);
         clearTimeout(this.timer); this.Client.Cancel(); const serial = ++this.serial;
         const preference = ValidSearchPreference({ ...this.State.Value.preference, ...change });
-        this.State.Value = { preference, status: preference.query.trim() ? 'searching' : 'idle', result: null, error: '' }; this.Save();
-        if (!preference.query.trim()) return;
+        this.State.Value = { preference, status: preference.query.trim() || this.browse && preference.siteId ? 'searching' : 'idle', result: null, error: '' }; this.Save();
+        if (!preference.query.trim() && !(this.browse && preference.siteId)) return;
         this.timer = setTimeout(() => { void this.Run(serial); }, delay);
     }
     private async Run(serial: number): Promise<void> {
         try {
             const preference = this.State.Value.preference;
-            const result = await this.Client.Search(preference, this.Sites());
+            const result = await this.Client.Search({ ...preference, browse: this.browse }, this.Sites());
             if (serial !== this.serial) return;
             const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
             if (preference.page > pages) { this.Query({ page: pages, scroll: 0 }, 0); return; }
@@ -70,3 +70,6 @@ export class LocalSearchController {
 }
 let controller: LocalSearchController | undefined;
 export function GetLocalSearchController(): LocalSearchController { return controller ??= new LocalSearchController(new StorageControllerBrowser(), new SearchWorkerClient(), ArabicSearchSites); }
+
+let explorer: LocalSearchController;
+export function GetExplorerSearchController(): LocalSearchController { return explorer ??= new LocalSearchController(new StorageControllerBrowser(), new SearchWorkerClient(), ArabicSearchSites, 'frontend.classic.arabic-explorer', true); }

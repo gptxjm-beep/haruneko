@@ -67,7 +67,7 @@ export class SearchWorkerEngine {
                     check(); const row = entries![i];
                     if (!identities.has(row.id)) {
                         identities.add(row.id);
-                        const score = Math.max(MatchScore(row.normalized, query, parameters.fuzzy), ...(row.aliases ?? []).map(alias => Math.min(950, MatchScore(alias, query, parameters.fuzzy))));
+                        const score = !query && parameters.browse && parameters.siteId ? 1 : Math.max(MatchScore(row.normalized, query, parameters.fuzzy), ...(row.aliases ?? []).map(alias => Math.min(950, MatchScore(alias, query, parameters.fuzzy))));
                         if (score) { count++; offer({ siteId: site.id, mangaId: row.id, title: row.title, score }); }
                     }
                     if (i % 250 === 249) await Yield();

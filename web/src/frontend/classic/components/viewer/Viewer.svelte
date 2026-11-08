@@ -9,9 +9,10 @@
 
     interface Props {
         mode?: 'Image' | 'Video';
+        isolated?: boolean;
         item: MediaContainer<MediaItem>;
     }
-    let { mode = 'Image', item }: Props = $props();
+    let { mode = 'Image', item, isolated = false }: Props = $props();
 
     let currentItem: MediaContainer<MediaItem> = $state();
     let currentImageIndex: number = $state(-1);
@@ -37,15 +38,18 @@
     }
 
     function onPreviousItem() {
+        if (isolated) return;
         currentImageIndex = -1;
         UI.selectedItem = UI.selectedItemPrevious;
     }
     function onNextItem() {
+        if (isolated) return;
         currentImageIndex = -1;
         if (wide && !UI.selectedItemNext) HakuNeko.ItemflagManager.FlagItem(item, FlagType.Current);
         UI.selectedItem = UI.selectedItemNext;
     }
     function onClose() {
+        if (isolated) return;
         HakuNeko.ItemflagManager.FlagItem(item, FlagType.Current);
     }
 
@@ -70,6 +74,7 @@
             {#if mode === 'Image'}
                 <ImageViewer
                     item={currentItem}
+                    nextItem={isolated ? undefined : UI.selectedItemNext}
                     {currentImageIndex}
                     bind:wide
                     {onNextItem}
