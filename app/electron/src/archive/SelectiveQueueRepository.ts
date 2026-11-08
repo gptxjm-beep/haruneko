@@ -35,6 +35,7 @@ export class SelectiveQueueRepository {
     private audits = new Map<number, { healthy: number; missing: number; review: number; at: number }>();
     constructor(private readonly db: DatabaseSync, private readonly ui: ArchiveUIRepository, private readonly work: ArchiveWorkRepository) {}
     private Transaction<T>(action: () => T): T {
+        if (this.db.isTransaction) return action();
         this.db.exec('BEGIN IMMEDIATE');
         try { const value = action(); this.db.exec('COMMIT'); return value; }
         catch(error) { this.db.exec('ROLLBACK'); throw error; }
@@ -252,7 +253,10 @@ export class SelectiveQueueRepository {
                 const ref = this.Reference(command.reference);
                 if (typeof command.selected !== 'boolean') throw new Error('Invalid selection');
                 if (command.selected) this.db.prepare('INSERT OR IGNORE INTO hub_selections(site_id,manga_id,title,site_name) VALUES(?,?,?,?)').run(ref.siteId, ref.mangaId, ref.title, ref.siteName);
-                else this.db.prepare('DELETE FROM hub_selections WHERE site_id=? AND manga_id=?').run(ref.siteId, ref.mangaId);
+                else {
+                    if (this.db.prepare('SELECT 1 FROM hub_selection_scopes c JOIN hub_selections s ON s.seq=c.selection_seq WHERE s.site_id=? AND s.manga_id=?').get(ref.siteId, ref.mangaId)) throw new Error('This cart item has chapter customizations. Confirm removal in Selection Cart');
+                    this.db.prepare('DELETE FROM hub_selections WHERE site_id=? AND manga_id=?').run(ref.siteId, ref.mangaId);
+                }
                 return;
             }
             if (command.operation === 'queue-add') {

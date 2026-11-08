@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { MigrateArchiveDatabase } from './ArchiveSchema';
 import { ArchiveWorkRepository } from './ArchiveWorkRepository';
 import { ArchiveUIRepository } from './ArchiveUIRepository';
+import { SelectionCartRepository } from './SelectionCartRepository';
 import { SelectiveQueueRepository } from './SelectiveQueueRepository';
 import { Count, Text, PathKey, RelativePath, IsWithin, SafeMessage, ErrorCode } from './ArchivePaths';
 import type { ArchiveAttemptResult, ChapterRegistration } from './ArchiveProtocol';
@@ -22,6 +23,7 @@ export class ArchiveRepository {
     public readonly Work: ArchiveWorkRepository;
     public readonly UI: ArchiveUIRepository;
     public readonly Queue: SelectiveQueueRepository;
+    public readonly Cart: SelectionCartRepository;
 
     constructor(private readonly filename: string) {
         fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -38,6 +40,7 @@ export class ArchiveRepository {
             this.Work = new ArchiveWorkRepository(this.database);
             this.UI = new ArchiveUIRepository(this.database, this.Work);
             this.Queue = new SelectiveQueueRepository(this.database, this.UI, this.Work);
+            this.Cart = new SelectionCartRepository(this.database, this.Queue);
             this.RecoverInterrupted();
         } catch(error) {
             this.database?.close();

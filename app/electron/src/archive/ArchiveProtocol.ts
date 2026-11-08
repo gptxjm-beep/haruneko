@@ -1,3 +1,4 @@
+import type { CartCommand } from './SelectionCartContract';
 import type { ArchiveCoordinatorCommand } from './ArchiveCoordinatorProtocol';
 import type { ArchiveStorageFault } from './ArchiveStorageContract';
 import type { ArchiveUICommand } from './ArchiveUIContract';
@@ -43,7 +44,7 @@ export interface ArchiveAttemptResult {
     errors: { stage: string; message: string }[];
 }
 
-export type ArchiveCommand = ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
+export type ArchiveCommand = CartCommand | ArchiveCoordinatorCommand | ArchiveUICommand | SelectiveQueueCommand
     | { operation: 'catalog-log'; runId: string; event: Record<string, unknown> }
     | { operation: 'catalog-open-logs' }
     | { operation: 'queue-details-inspect'; seq: number }

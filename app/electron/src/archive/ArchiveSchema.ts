@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const ArchiveSchemaVersion = 10;
+export const ArchiveSchemaVersion = 11;
 
 // Fixed historical values only: do not match substrings in independently supplied ordering evidence.
 const legacyOrder = 'MangaScraper.FetchChapters guarantees newest-first after connector decorators';
@@ -132,6 +132,9 @@ const migrations = [
      UPDATE hub_queue_control SET state='Review',current_seq=NULL,
        reason='Legacy run membership is unproven; explicit confirmation of a new run is required'
        WHERE preferences IS NOT NULL AND state IN ('Running','Paused','Interrupted','Limited','Failed');`,
+    // v11: scope extension only. Legacy selection identities, receipts and consent batches stay intact.
+    `CREATE TABLE hub_selection_scopes(selection_seq INTEGER PRIMARY KEY REFERENCES hub_selections(seq) ON DELETE CASCADE,
+       revision INTEGER NOT NULL DEFAULT 1,value TEXT NOT NULL);`,
 ];
 
 export function MigrateArchiveDatabase(database: DatabaseSync, target = ArchiveSchemaVersion): void {

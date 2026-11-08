@@ -150,6 +150,7 @@ export class ArchiveIPC {
             this.repository.Queue.AuditResult(command.seq, results);
             return results.map(row => ({ id: row.id, localState: row.state }));
         }
+        if (command.operation.startsWith('cart-')) return this.repository.Cart.Execute(command as import('./SelectionCartContract').CartCommand);
         if (command.operation.startsWith('queue-')) return this.repository.Queue.Execute(command as SelectiveQueueCommand);
         switch (command.operation) {
             case 'ui-preferences': return { preferences: this.repository.UI.Preferences(), rootLabel: this.repository.UI.RootLabel(this.repository.UI.Preferences().rootId) };
