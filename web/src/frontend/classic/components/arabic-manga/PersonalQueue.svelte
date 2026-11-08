@@ -27,7 +27,6 @@
     let timer: ReturnType<typeof setInterval>;
     let loadSerial = 0, polling = false;
     const audited = new Set<string>();
-    let removal = $state<number>();
     onDestroy(() => { clearInterval(timer); loadSerial++; });
     const observe = value => { view = value; };
     queue.State.Subscribe(observe); onDestroy(() => queue.State.Unsubscribe(observe));
@@ -91,7 +90,7 @@
         {#if view.error}<p role="alert">{view.error}</p>{/if}
         {#each rows as row, index (JSON.stringify([row.seq, 'enqueueVersion' in row ? row.enqueueVersion : 0]))}
             <article data-testid="personal-entry">
-                <div class="card-overview"><div class="identity">{#if !selections}<SavedCover seq={row.seq} state={'detailsState' in row ? `${row.detailsState}:${row.detailsRevision}` : undefined} />{/if}<div><h3 dir="auto">{row.title}</h3><p dir="auto">{row.siteName}</p>{#if 'state' in row}<strong>{row.state}</strong><progress max={row.progress?.selected || row.progress?.registered || 1} value={row.progress?.verified ?? 0} aria-label="Verified registered chapters"></progress>{/if}</div></div>
+                <div class="card-overview"><div class="identity">{#if !selections}<SavedCover seq={row.seq} state={'detailsState' in row ? `${row.detailsState}:${row.detailsRevision}` : undefined} />{/if}<div><h3 dir="auto">{row.title}</h3><p dir="auto">{row.siteName}</p>{#if 'historyCount' in row && row.historyCount}<MangaInfoEditor seq={row.seq} onchanged={() => action(async () => {})} />{/if}{#if 'state' in row}<strong>{row.state}</strong><progress max={row.progress?.selected || row.progress?.registered || 1} value={row.progress?.verified ?? 0} aria-label="Verified registered chapters"></progress>{/if}</div></div>
                 {#if 'state' in row}<dl class="stats"><div><dt>Available Chapters (observed)</dt><dd>{available(row) ?? 'Unknown'}</dd></div><div><dt>Selected</dt><dd>{selectedCount(row) ?? 'Unknown'}</dd></div><div><dt>Completed (verified)</dt><dd>{row.progress?.verified ?? 0}</dd></div><div><dt>Downloading</dt><dd dir="auto">{row.progress?.chapter ?? '—'}</dd></div><div><dt>Failed</dt><dd>{row.progress?.failed ?? 0}</dd></div><div><dt>Partial / Review</dt><dd>{row.progress?.review ?? row.existing?.review ?? 0}</dd></div><div><dt>Pending</dt><dd>{row.progress?.pending ?? 'Unknown'}</dd></div></dl>{/if}</div>
                 {#if missing[index]}<p class="warning">This reference is missing from the current catalog. Your selection is retained; the catalog may be incomplete.</p>{/if}
                 {#if selections}
@@ -99,16 +98,22 @@
                     <button disabled={busy} onclick={() => action(() => queue.Add(row))}>Add to Queue</button>
                 {:else if 'state' in row}
                     {#if row.existing}<p class="existing">{row.existing.healthy ? 'Existing verified chapters found' : 'Previous files checked'}: {row.existing.healthy} healthy · {row.existing.missing} missing · {row.existing.review} need review.</p>{/if}
-                    {#if row.reason}<p class="reason" role={['Failed','Review'].includes(row.state) ? 'alert' : 'status'}>{row.reason}</p>{/if}
+                    {#if row.reason && ['Failed','Review','Paused','Interrupted'].includes(row.state)}<p class="reason" role={['Failed','Review'].includes(row.state) ? 'alert' : 'status'}>{row.reason}</p>{/if}
                     {#if row.detailsState}<p>Additional details: {row.detailsState}</p>{/if}
-                    <button disabled={busy} onclick={() => action(async () => OpenHubManga(row))}>Open Manga</button><button disabled={busy} onclick={() => action(() => new ArchiveClient().Request<void>({ operation: 'queue-open-folder', seq: row.seq }))}>Open Folder</button>
                     <QueueChapters {row} running={view.summary?.state === 'Running' || busy} onedit={work => action(work, true)} />
                     {#if row.progress?.storage}<p role="alert">Storage stopped: {row.progress.storage}. Completed files are safe. Resolve the storage issue before resuming.</p>{/if}
-                    <details><summary>Details and scope</summary><p dir="auto">Source ID: <bdi>{row.mangaId}</bdi></p><p>{row.reason}</p>
+                    <div class="task-actions">
+                        <button disabled={busy} onclick={() => action(async () => OpenHubManga(row))}>Open Manga</button><button disabled={busy || !row.historyCount} title={!row.historyCount ? 'No saved session yet' : 'Open the saved manga folder'} onclick={() => action(() => new ArchiveClient().Request<void>({ operation: 'queue-open-folder', seq: row.seq }))}>Open Folder</button>
+                        <button disabled={busy || !row.historyCount || view.summary?.state === 'Running'} title={view.summary?.state === 'Running' ? 'Pause Downloads before checking files' : 'Check saved files without downloading'} onclick={() => action(async () => { await queue.Audit(row.seq); })}>Check files</button>
+                        <button disabled={busy || view.summary?.state === 'Running' || page * 50 + index === 0} title={view.summary?.state === 'Running' ? 'Pause Downloads to reorder' : 'Move earlier in the queue'} onclick={() => action(() => queue.Edit(row.seq, 'up'))}>Move up</button>
+                        <button disabled={busy || view.summary?.state === 'Running' || page * 50 + index >= (view.summary?.queued ?? 0) - 1} title={view.summary?.state === 'Running' ? 'Pause Downloads to reorder' : 'Move later in the queue'} onclick={() => action(() => queue.Edit(row.seq, 'down'))}>Move down</button>
+                        <button disabled={busy || ['Preparing','Downloading'].includes(row.state)} title={['Preparing','Downloading'].includes(row.state) ? 'Pause the active task before removing it' : 'Remove from this list; saved files and history are retained'} onclick={() => action(() => queue.Edit(row.seq, 'remove'))}>Remove from downloads</button>
+                    </div>
+                    <details class="task-details"><summary>Details</summary><p dir="auto">Source ID: <bdi>{row.mangaId}</bdi></p><p>{row.reason}</p>
                     {#if view.summary?.batchId && !row.inCurrentRun && ['Queued','Paused'].includes(row.state)}<p>Waiting for a later run confirmation.</p>{/if}
                     {#if row.reason.includes('unknown-order')}<p class="warning">Chapter order is unverified. This item needs review before downloading.</p>{/if}
                     {#if row.progress}<p>Verified chapters: {row.progress.verified}/{row.progress.registered} • Verified data: {row.progress.bytes} bytes{row.progress.chapter ? ` • Current chapter: ${row.progress.chapter}` : ''}</p>{/if}
-                    <p>Scope: {JSON.stringify(row.scope)}. Completed means the requested registered work is verified, not that the source is complete.</p>
+                    <p>Scope: {row.scope.mode} · {row.scope.order ?? 'source'}. Source completeness remains unproven.</p>
                     {#if !row.sessionId}
                         <label>Chapter scope <select disabled={busy || view.summary?.state === 'Running'} value={row.scope.mode} onchange={event => action(() => scope(row, event.currentTarget.value as 'all' | 'missing' | 'range'))}>
                             <option value="all">{QueueScopeLabels.all}</option><option value="missing">{QueueScopeLabels.missing}</option><option value="range">{QueueScopeLabels.range}</option>
@@ -118,9 +123,8 @@
                             <label>To <input type="number" min="1" value={row.scope.to} disabled={busy} onchange={event => action(() => queue.Edit(row.seq, 'up', { mode: 'range', from: row.scope.mode === 'range' ? row.scope.from : 1, to: Number(event.currentTarget.value) }))} /></label>
                         {/if}
                     {/if}
-                    </details>{#if row.historyCount}<DownloadReport seq={row.seq} scope={row.scope} disabled={busy || view.summary?.state === 'Running' || !row.sessionId} onretry={scope => action(() => queue.Supplement(row.seq, scope), true)} /><MangaInfoEditor seq={row.seq} onchanged={() => action(async () => {})} />{/if}<details><summary>More</summary>{#if row.historyCount}<button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(async () => { await queue.Audit(row.seq); })}>Check files</button>{/if}<button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'up'))}>Move up</button>
-                    <button disabled={busy || view.summary?.state === 'Running'} onclick={() => action(() => queue.Edit(row.seq, 'down'))}>Move down</button>
-                    <button disabled={busy || ['Preparing','Downloading'].includes(row.state)} onclick={() => { removal = row.seq; }}>Remove from downloads</button></details>{#if removal === row.seq}<p role="alert">Remove this task? Files, history and budgets will be retained.</p><button onclick={() => action(async () => { await queue.Edit(row.seq, 'remove'); removal = undefined; })}>Confirm remove from downloads</button><button onclick={() => removal = undefined}>Keep task</button>{/if}
+                    {#if row.historyCount}<DownloadReport seq={row.seq} scope={row.scope} disabled={busy || view.summary?.state === 'Running' || !row.sessionId} onretry={scope => action(() => queue.Supplement(row.seq, scope), true)} />{/if}
+                    </details>
                 {/if}
             </article>
         {/each}
@@ -134,5 +138,6 @@
     h2 { font-size: 1.15rem; margin: 1rem 0; } h3 { font-size: 1.1rem; } p { margin: .75rem 0; line-height: 1.6; overflow-wrap: anywhere; }
     article { padding: .75rem; margin: .6rem 0; background: var(--cds-ui-01); } button { background: var(--cds-field-01); color: var(--cds-text-01); padding: .45rem .6rem; margin: .2rem; border: 1px solid var(--cds-ui-03); cursor: pointer; } button:disabled { opacity: .5; cursor: default; } .warning { color: var(--cds-support-warning); }
     summary { cursor:pointer; color:var(--cds-text-02); font-size:.8rem; } details { margin:.5rem 0; }
+    .task-actions { display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin:.7rem 0; } .task-actions button { margin:0; } .task-details { border-top:1px solid var(--cds-ui-03);padding-top:.6rem; }
     .card-overview { display:grid; grid-template-columns:minmax(0,1fr) minmax(20rem,1fr); gap:1rem; } .identity { display:flex; align-items:start; gap:.75rem; } .identity>div { min-width:0; } .stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.55rem; font-size:.78rem; } dt { color:var(--cds-text-02); } dd { margin:.25rem 0; overflow-wrap:anywhere; } progress { display:block; width:100%; height:.4rem; margin-top:.5rem; } .reason,.existing { font-size:.8rem; } @media(max-width:850px) { .card-overview { grid-template-columns:1fr; } }
 </style>

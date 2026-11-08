@@ -75,6 +75,12 @@
     record('Queue priority can change without changing stable manga identities', rows.map(row => row.mangaId).join(',') === 'berserk,bleach,one');
     await wait(() => [...document.querySelectorAll('[data-testid="personal-entry"]')].some(entry => entry.textContent.includes('Bleach Queue')));
     const bleachCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(entry => entry.textContent.includes('Bleach Queue'));
+    const moveCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('One Piece Queue'));
+    await wait(() => ![...moveCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Move up').disabled);
+    [...moveCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Move up').click(); await wait(async () => (await queue.List())[1].mangaId === 'one');
+    await wait(() => ![...moveCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Move down').disabled);
+    [...moveCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Move down').click(); await wait(async () => (await queue.List())[2].mangaId === 'one');
+    record('Visible Move up and Move down buttons reorder the original queue and the top boundary is disabled', [...document.querySelector('[data-testid="personal-entry"]').querySelectorAll('button')].find(button => button.textContent.trim() === 'Move up').disabled);
     await wait(() => previewCacheCaptured);
     await wait(() => ![...bleachCard().querySelectorAll('button')].find(button => button.textContent.startsWith('Chapters (')).disabled);
     [...bleachCard().querySelectorAll('button')].find(button => button.textContent.startsWith('Chapters (')).click();
@@ -146,6 +152,9 @@
     record('Real native details publication saves a separate valid cover receipt without changing chapter completion or cumulative budget', detailResult === 'Saved' && detailsHealth.coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed' && (await client.Request({ operation: 'queue-summary' })).chaptersStarted === summary.chaptersStarted);
     await client.Request({ operation: 'queue-details-save', seq: detailsItem.seq, text: 'Known optional details', cover: new TextEncoder().encode('<html>not an image</html>'), extension: 'png', partial: false });
     record('Native optional-cover validation rejects HTML while preserving the healthy cover and chapter receipts', (await client.Request({ operation: 'queue-details-inspect', seq: detailsItem.seq })).coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed');
+    await wait(() => [...document.querySelectorAll('[data-testid="personal-entry"]')].some(card => card.textContent.includes('Berserk Queue') && card.textContent.includes('Edit Manga Info')));
+    [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue')).scrollIntoView({block: 'center'}); await ipcRenderer.invoke('QueueTest::Capture');
+
     await wait(() => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'))?.textContent.includes('Edit Manga Info'));
     const infoCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'));
     [...infoCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Open Folder').click();
@@ -184,6 +193,9 @@
     record('Download Report retains both attempt histories and verified physical-file counts', report.sessions.length === 2 && report.sessions.every(session => session.counts.completed === 1 && session.history.length));
     const completedCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'));
     await wait(() => [...completedCard().querySelectorAll('button')].some(button => button.textContent.trim() === 'Download Report'));
+    record('Downloads keeps Edit Manga Info by its title, all primary actions outside Details, and Download Report inside closed Details', !!completedCard().querySelector('.identity button') && !completedCard().querySelector('.task-details').open && [...completedCard().querySelectorAll('.task-actions button')].map(button => button.textContent.trim()).join(',') === 'Open Manga,Open Folder,Check files,Move up,Move down,Remove from downloads' && [...completedCard().querySelectorAll('.task-details button')].some(button => button.textContent.trim() === 'Download Report'));
+
+    completedCard().querySelector('.task-details').open = true;
     [...completedCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Download Report').click();
     await wait(() => completedCard().querySelector('[data-testid="download-report"]')?.textContent.includes('verified requested chapters'));
     record('The real Download Report panel opens current and historical verified chapter results without another source request', completedCard().querySelector('[data-testid="download-report"]').textContent.includes('Recorded history'));
@@ -193,6 +205,10 @@
     await ipcRenderer.invoke('QueueTest::RemoveIsolatedChapter');
     const diskAudit = await queue.Audit(readded.seq);
     record('An externally removed isolated chapter loses its Verified badge while immutable receipts and historical reports remain', diskAudit.some(row => row.localState === 'missing') && (await queue.List()).find(row => row.seq === readded.seq).state === 'Review' && (await queue.List()).find(row => row.seq === readded.seq).progress.verified === 0 && (await client.Request({ operation: 'queue-report', seq: readded.seq })).sessions.some(session => session.history.length));
+    const lateCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Added during first download'));
+    await wait(() => lateCard()); const budgetBeforeRemoval = await client.Request({ operation: 'queue-summary' });
+    [...lateCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Remove from downloads').click(); await wait(() => !lateCard());
+    record('Removing a nonactive download is immediate without confirmation and preserves receipts and cumulative budgets', !document.body.textContent.includes('Confirm remove from downloads') && (await client.Request({ operation: 'queue-summary' })).chaptersStarted === budgetBeforeRemoval.chaptersStarted && (await client.Request({ operation: 'queue-report', seq: readded.seq })).sessions.length === 2);
     await runner.Cancel(); record('Cancel preserves the original manual download manager and does not delete completed references', originalDownloads.Queue.Value.length === 0 && (await queue.List()).some(row => row.state === 'Completed'));
     record('Selective setup and execution do not modify the existing archiving defaults', JSON.stringify((await client.Request({ operation: 'ui-preferences' })).preferences) === JSON.stringify(defaults.preferences));
     await queue.Add({ siteId: a.Identifier, siteName: a.Title, mangaId: 'preview15', title: 'Fifteen chapter preview' });

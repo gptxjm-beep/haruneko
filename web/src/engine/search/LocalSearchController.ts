@@ -25,7 +25,7 @@ export class LocalSearchController {
     constructor(private readonly storage: StorageController, public readonly Client: SearchWorkerClient, public readonly Sites: () => SearchSite[], private readonly preferenceKey = SearchPreferenceKey, private readonly browse = false) {
         if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
             this.channel = new BroadcastChannel('haruneko-catalog');
-            this.channel.onmessage = () => { if (this.State.Value.preference.query.trim()) this.Query({}, 100); };
+            this.channel.onmessage = () => { if (this.State.Value.preference.query.trim() || this.browse && this.State.Value.preference.siteId) this.Query({}, 100); };
         }
     }
     public Initialize(): Promise<void> {

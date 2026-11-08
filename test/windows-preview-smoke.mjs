@@ -128,7 +128,8 @@ async function Stop(page) {
     check('Packaged local Worker search, independent selection and individual queue additions work', true);
     await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Explorer').click());
     await page.waitForSelector('[data-testid="library-explorer"]');
-    await page.select('[data-testid="library-explorer"] .filters select', 'mangatek');
+    await page.waitForSelector('#explorer-site option[value="mangatek"]');
+    await page.select('[data-testid="library-explorer"] #explorer-site', 'mangatek');
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="library-explorer"] .mangas article').length === 2);
     check('Packaged Explorer browses the local source through the shared Worker without chapter requests', true);
     const cart = await page.evaluate(async () => (await ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'cart-list' })).value);

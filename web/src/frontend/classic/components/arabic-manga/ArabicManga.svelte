@@ -4,7 +4,7 @@
     import { FilterHubSites, IsMultilingual, OpenPlugin, SiteObservation, type SiteScope } from '../../models/PluginPresentation';
     import { Store as UI } from '../../stores/Stores.svelte';
     import { GetSiteIndexController, ArabicCatalogSources, IndexStateLabel, IndexJobStateLabel, IndexErrorLabel } from '../../../../engine/catalog/SiteIndexController';
-    import { VerifySite, CloseVerification } from '../../../../engine/catalog/VerifySite';
+    import { CloseVerification } from '../../../../engine/catalog/VerifySite';
     import LibraryExplorer from './LibraryExplorer.svelte';
     import SharedSearch from './SharedSearch.svelte';
     import PersonalQueue from './PersonalQueue.svelte';
@@ -29,6 +29,7 @@
     indexer.State.Subscribe(observeIndex); indexer.Activity.Subscribe(observeActivity);
     onDestroy(() => { indexer.State.Unsubscribe(observeIndex); indexer.Activity.Unsubscribe(observeActivity); });
     onMount(() => { void searcher.Initialize(); heading?.focus(); void indexer.Initialize().then(() => { initialized = true; }).catch(() => { actionError = 'Cannot open the catalog ledger. No update has started.'; }); });
+    onMount(() => { const channel = new BroadcastChannel('haruneko-catalog'); channel.onmessage = () => { void indexer.Refresh().catch(() => { actionError = 'Cannot refresh saved catalog status.'; }); }; return () => channel.close(); });
     async function command(action: 'start' | 'resume' | 'pause' | 'cancel', siteId?: string) {
         actionError = '';
         try {
@@ -50,7 +51,7 @@
     $effect(() => { query; scope; page = 1; });
 </script>
 
-<section id="ArabicManga" lang="en" dir="ltr" aria-labelledby="arabic-manga-title" data-testid="arabic-manga-hub">
+<section id="ArabicManga" class:exploring={UI.hubSection === 'explorer'} lang="en" dir="ltr" aria-labelledby="arabic-manga-title" data-testid="arabic-manga-hub">
     <header class="hub-heading"><div><h1 id="arabic-manga-title" tabindex="-1" bind:this={heading}>Arabic Manga</h1><p>Your saved Arabic manga catalogs</p></div><Button kind="ghost" size="small" onclick={() => (UI.page = 'media')}>Back to Media List</Button></header>
     <nav aria-label="Arabic Manga sections">
         <button aria-current={UI.hubSection === 'sites' ? 'page' : undefined} onclick={() => chooseSection('sites')}>Sites</button>
@@ -70,6 +71,7 @@
         {#if index.job?.current}<strong>Updating: {HakuNeko.PluginController.WebsitePlugins.find(site => site.Identifier === index.job.current)?.Title ?? index.job.current}</strong>{/if}
         {#if activity.progress && activity.progress.siteId === index.job?.current}<span>Observed titles: {activity.progress.observed} (not yet published)</span>{/if}
     </div>
+    {#if activity.verification}<p role="status">Waiting for human verification. Complete it in the browser window; this site will continue automatically. Pause or Cancel to stop.</p>{/if}
     {#if activity.draining}<p role="status">Waiting for an older connector request to settle before another site can start.</p>{/if}
     {#if actionError || activity.error}<p role="alert">{actionError || activity.error}</p>{/if}
     {#if ['search','selections'].includes(UI.hubSection)}
@@ -78,8 +80,6 @@
         <PersonalQueue />
     {:else if UI.hubSection === 'sites'}
         {#if globalThis.ipcRenderer?.invoke}<Button kind="ghost" size="small" onclick={openLogs}>Open Logs</Button>{/if}
-        {#if index.job?.items.some(item => ['verification','ready'].includes(item.state))}<details class="verification"><summary>Verification Required ({index.job.items.filter(item => ['verification','ready'].includes(item.state)).length})</summary>
-        {#each index.job.items.filter(item => ['verification','ready'].includes(item.state)) as item (item.siteId)}<p>{HakuNeko.PluginController.WebsitePlugins.find(site => site.Identifier === item.siteId)?.Title ?? item.siteId} · {IndexStateLabel[item.state]} <button onclick={async () => { try { await VerifySite(item.siteId); } catch { actionError = 'Cannot open verification. Close the current window and retry.'; } }}>Verify</button></p>{/each}<button onclick={async () => { try { await CloseVerification(); } catch { actionError = 'Verification window is still closing'; } }}>Close verification window</button></details>{/if}
         <div class="filters"><label>Find a site<input type="search" data-testid="arabic-site-filter" bind:value={query} placeholder="Name, ID or host" /></label>
             <label>Language support<select bind:value={scope} data-testid="arabic-site-scope"><option value="arabic">Explicit Arabic support</option><option value="multilingual-unconfirmed">Multilingual — Arabic unconfirmed</option></select></label></div>
         <div class="preference"><PluginOrder english /><small>Language tags identify sources; catalog availability does not certify image downloads.</small></div>
@@ -105,11 +105,15 @@
         </div>
         <div class="pagination"><Button size="small" kind="ghost" disabled={page <= 1} onclick={() => page--}>Previous</Button><span>{page}/{pages}</span><Button size="small" kind="ghost" disabled={page >= pages} onclick={() => page++}>Next</Button></div>
     {/if}
-    <div hidden={UI.hubSection !== 'explorer'}><LibraryExplorer /></div>
+    <div class="explorer-host" hidden={UI.hubSection !== 'explorer'}><LibraryExplorer /></div>
     <aside>Experimental archiving: 5 manga, 20 chapter attempts, at least 50 GiB free-space reserve. Catalog updates fetch titles only.</aside>
 </section>
 <style>
     #ArabicManga { height:100%; overflow-y:auto; padding:1rem 1.25rem; color:var(--cds-text-01); background:var(--cds-ui-background); }
+    #ArabicManga.exploring { display:flex; flex-direction:column; overflow:hidden; }
+    .exploring>.hub-heading,.exploring>nav,.exploring>.update-bar,.exploring>aside { flex-shrink:0; }
+    .exploring>.explorer-host { flex:1; min-height:0; display:flex; }
+    @media(max-width:760px) { #ArabicManga.exploring { display:block; overflow:auto; } }
     .hub-heading,.card-title,.stats,.actions,.update-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.5rem; }
     .hub-heading { margin-bottom:1rem; } h1 { font-size:1.6rem; } h2 { font-size:1rem; overflow-wrap:anywhere; } p { line-height:1.45; margin:.35rem 0; }
     nav { display:flex; gap:.5rem; border-bottom:1px solid var(--cds-ui-03); margin-bottom:.8rem; } nav button { background:transparent; color:var(--cds-text-02); border:0; border-bottom:3px solid transparent; padding:.7rem 1.2rem; font:inherit; cursor:pointer; } nav [aria-current] { border-color:var(--cds-interactive-01); color:var(--cds-text-01); font-weight:600; }
