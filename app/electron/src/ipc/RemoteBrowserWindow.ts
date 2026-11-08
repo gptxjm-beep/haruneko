@@ -50,7 +50,8 @@ export class RemoteBrowserWindowController {
     }
 
     private CloseWindow(windowID: number): Promise<void> {
-        return this.Close(this.FindWindow(windowID));
+        const win = BrowserWindow.fromId(windowID);
+        return win ? this.Close(win) : Promise.resolve();
     }
 
     private async Close(win: BrowserWindow) {

@@ -1,6 +1,7 @@
 import { vi, describe, it, expect } from 'vitest';
 import type { IPC } from './InterProcessCommunication';
 import { Channels } from './InterProcessCommunicationChannels';
+vi.mock('electron', () => ({ BrowserWindow: { fromId: vi.fn(() => undefined) } }));
 import { RemoteBrowserWindowController } from './RemoteBrowserWindow';
 
 class TestFixture {
@@ -16,6 +17,12 @@ class TestFixture {
 
 describe('RemoteBrowserWindowController', () => {
 
+    it('Should close an already user-closed verification window idempotently so another deferred site can be opened', async () => {
+        const fixture = new TestFixture(); fixture.CreatTestee();
+        const callback = vi.mocked(fixture.mockIPC.Handle).mock.calls.find(call => String(call[0]) === String(Channels.RemoteBrowserWindowController.CloseWindow))![1] as (id: number) => Promise<void>;
+        await expect(callback(42)).resolves.toBeUndefined();
+        await expect(callback(42)).resolves.toBeUndefined();
+    });
     describe('Constructor', () => {
 
         it('Should subscribe to IPC events', () => {
