@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -20,7 +20,9 @@ let service;
 let other;
 try {
     // Test-only native dialog fixture. Production code contains no test path override.
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] });
+    dialog.showOpenDialog = async (_window, options) => ({ canceled: false, filePaths: [options.properties.includes('openFile') ? path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'cover.png') : root] });
+    let openedMangaFolder = false; shell.openPath = async target => { openedMangaFolder = target === path.join(root, 'Queue source A', 'Berserk Queue'); return ''; };
+    ipcMain.handle('QueueTest::FolderOpened', () => openedMangaFolder);
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path.join(directory, 'isolated-download-report.json') });
     const url = process.env.HARUNEKO_ARCHIVE_TEST_URL;
     const preferences = { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: process.env.HARUNEKO_ARCHIVE_TEST_PRELOAD };
@@ -61,13 +63,19 @@ try {
     ipcMain.handle('SearchTest::Capture', async () => {
         if (process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT) { window.showInactive(); await new Promise(resolve => setTimeout(resolve, 300)); await fs.writeFile(process.env.HARUNEKO_SEARCH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG()); }
     });
+    ipcMain.handle('QueueTest::ManualInfoEdit', async () => {
+        const file = path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'metadata.json');
+        const metadata = JSON.parse(await fs.readFile(file, 'utf8'));
+        metadata.title = 'Externally edited title'; metadata.fields.Description = 'Manual JSON story <img src=x onerror=alert(1)>';
+        await fs.writeFile(file, JSON.stringify(metadata));
+    });
     ipcMain.handle('QueueTest::OfflineDetails', async () => {
         const local = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, partition: 'offline-details-test' } });
         let requests = 0;
         local.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => { requests++; callback({ cancel: true }); });
         try {
-            await local.loadFile(path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details', 'index.html'));
-            const result = await local.webContents.executeJavaScript('({ title: document.title, text: document.body.innerText, width: document.querySelector("img")?.naturalWidth })');
+            await local.loadFile(path.join(root, 'Queue source A', 'Berserk Queue', '00 - Manga Details.html'));
+            const result = await local.webContents.executeJavaScript('({ title: document.title, text: document.body.innerText, width: document.querySelector("img")?.naturalWidth, images: document.images.length, scripts: document.scripts.length })');
             return { ...result, requests };
         } finally { local.webContents.session.webRequest.onBeforeRequest(null); local.destroy(); }
     });
@@ -105,6 +113,8 @@ try {
     for (const check of searchChecks) assert.equal(check.passed, true, check.name);
     const queueChecks = await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_SELECTIVE_QUEUE_TEST_SCRIPT, 'utf8'));
     for (const check of queueChecks) assert.equal(check.passed, true, check.name);
+    const explorerChecks = await window.webContents.executeJavaScript(await fs.readFile(path.resolve('test/library-explorer-renderer.mjs'), 'utf8'));
+    for (const check of explorerChecks) assert.equal(check.passed, true, check.name);
     const priorityChecks = process.env.HARUNEKO_PRIORITY_TEST_SCRIPT ? await window.webContents.executeJavaScript(await fs.readFile(process.env.HARUNEKO_PRIORITY_TEST_SCRIPT, 'utf8')) : [];
     for (const check of priorityChecks) assert.equal(check.passed, true, check.name);
     // This script deliberately leaves an unfinished catalog job for the reload checks below.
@@ -137,6 +147,9 @@ try {
         const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); const client = new ArchiveClient();
         return { summary: await client.Request({ operation: 'queue-summary' }), selected: await client.Request({ operation: 'queue-selections' }), rows: await client.Request({ operation: 'queue-list' }) };
     })()`);
+    const restoredCart = await window.webContents.executeJavaScript(`(async () => { const { ArchiveClient } = await import('/src/engine/archive/ArchiveClient.ts'); return new ArchiveClient().Request({ operation: 'cart-list' }); })()`);
+    assert.equal(restoredCart.find(item => item.siteId === 'explorer-a' && item.mangaId === 'm-0').mode, 'except', 'Explorer partial cart selection survives renderer destruction');
+    assert.deepEqual(restoredCart.find(item => item.siteId === 'explorer-a' && item.mangaId === 'm-0').ids, ['2']);
     assert.equal(queueRecovery.summary.state, 'Cancelled', 'Restoring the queue never automatically starts it');
     assert.equal(queueRecovery.summary.chaptersStarted, queueFixture.chaptersStarted, 'Queue attempt budgets survive renderer replacement');
     assert.equal(queueRecovery.selected.length, queueFixture.selected, 'Personal selections survive renderer replacement');
@@ -188,7 +201,7 @@ try {
     assert.equal(denied, true, 'A second renderer must not use the archive repository');
     const written = await fs.readFile(path.join(root, 'Site', 'Manga', 'Chapter 1', '1.png'));
     assert.equal(written[0], 0x89);
-    console.log(`${checks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + searchChecks.length + queueChecks.length + priorityChecks.length + 20} Electron renderer/IPC/archive UI pipeline checks passed`);
+    console.log(`${checks.length + explorerChecks.length + uiChecks.length + hubChecks.length + indexChecks.length + indexMigrationChecks.length + searchChecks.length + queueChecks.length + priorityChecks.length + 20} Electron renderer/IPC/archive UI pipeline checks passed`);
     await service.Close();
     other.destroy(); window.destroy();
     app.exit(0);

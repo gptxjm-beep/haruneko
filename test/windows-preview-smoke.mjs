@@ -120,14 +120,23 @@ async function Stop(page) {
     await page.waitForSelector('[data-testid="shared-search-query"]:not(:disabled)');
     await page.type('[data-testid="shared-search-query"]', 'Preview Smoke');
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="shared-search-result"]').length === 2);
+    await page.evaluate(() => [...document.querySelectorAll('[data-testid="shared-search"] label')].find(label => label.textContent.trim() === 'Multi-select').querySelector('input').click());
     await page.click('[data-testid="shared-search-result"] input[type=checkbox]');
     await page.waitForFunction(async () => (await ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'queue-summary' })).value.selected === 2);
     await page.evaluate(() => [...document.querySelectorAll('[data-testid="shared-search-result"] button')].filter(button => button.textContent.trim() === 'Add to Queue').forEach(button => button.click()));
     await page.waitForFunction(async () => (await ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'queue-summary' })).value.queued === 2);
     check('Packaged local Worker search, independent selection and individual queue additions work', true);
+    await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Explorer').click());
+    await page.waitForSelector('[data-testid="library-explorer"]');
+    await page.select('[data-testid="library-explorer"] .filters select', 'mangatek');
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="library-explorer"] .mangas article').length === 2);
+    check('Packaged Explorer browses the local source through the shared Worker without chapter requests', true);
+    const cart = await page.evaluate(async () => (await ipcRenderer.invoke('ArchiveRepository::Request', { operation: 'cart-list' })).value);
+    check('Packaged Search and Explorer share the upgraded persistent cart, including the legacy selection', cart.length === 2 && cart.some(item => item.siteId === 'legacy-site') && cart.some(item => item.siteId === 'mangatek'));
+
     await page.evaluate(() => [...document.querySelectorAll('#ArabicManga nav button')].find(button => button.textContent.trim() === 'Downloads').click());
     await page.waitForSelector('[data-testid="personal-queue"]');
-    check('Packaged Downloads explains equivalent scopes, confirmed membership and SQLite compatibility', await page.evaluate(() => document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing') && document.querySelector('[data-testid="queue-run-membership"]') !== null && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10')));
+    check('Packaged Downloads explains equivalent scopes, confirmed membership and SQLite compatibility', await page.evaluate(() => document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing') && document.querySelector('[data-testid="queue-run-membership"]') !== null && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v11')));
     const queueBefore = await page.evaluate(async () => {
         const request = async command => { const reply = await ipcRenderer.invoke('ArchiveRepository::Request', command); if (!reply.ok) throw new Error(reply.error.message); return reply.value; };
         const defaults = await request({ operation: 'ui-preferences' }); const preferences = { ...defaults.preferences, rootId: 'smoke-root' };
@@ -168,7 +177,7 @@ async function Stop(page) {
     await Stop(again);
     const upgraded = new DatabaseSync(path.join(portableData, 'profile/archive/state.sqlite'));
     report.archiveSchema = Number(upgraded.prepare('PRAGMA user_version').get().user_version); upgraded.close();
-    check('Packaged main migrates SQLite v9 to v10', report.archiveSchema === 10);
+    check('Packaged main migrates SQLite v9 to v11', report.archiveSchema === 11);
     const data = path.join(unpacked, 'haruneko-preview-data');
     check('Archive database resides inside the portable preview profile', (await fs.stat(path.join(data, 'profile/archive/state.sqlite'))).isFile());
     check('Chromium browser storage is isolated inside the preview directory', (await fs.stat(path.join(data, 'browser'))).isDirectory());

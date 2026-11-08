@@ -22,7 +22,7 @@ class LocalProvider extends FetchProvider {
             if (request.signal.aborted) abort();
         });
         const body = typeof route.body === 'function' ? await route.body(request) : route.body;
-        const response = new Response(body, { status: route.status ?? 200, headers: { 'Content-Type': route.type ?? 'text/html' } });
+        const response = new Response(body, { status: typeof route.status === 'function' ? route.status() : route.status ?? 200, headers: { 'Content-Type': route.type ?? 'text/html' } });
         Object.defineProperty(response, 'url', { value: route.finalUrl ?? request.url });
         RecordDiagnosticResponse(request, response);
         RecordCatalogHTTP(request, response);

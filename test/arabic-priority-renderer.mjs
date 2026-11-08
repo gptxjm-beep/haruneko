@@ -160,8 +160,10 @@
     record('Metadata aliases from a different linked work are never assigned to the chosen manga', ExtractMangaDetails(related, new URL('https://3asq.online/manga/catalog-0/')).aliases.join(',') === 'Real alias');
     const { default: MangaSpark } = await import('/src/engine/websites/MangaSpark.ts');
     const spark = new MangaSpark().CreatePlugin(browserStore, new SettingsManager(browserStore)); spark.Initialize = async () => {};
-    Respond('https://sparkmanga.net/wp-admin/admin-ajax.php', { body: async request => {
+    let sparkTransient = false, sparkFail = false; const sparkPages = [];
+    Respond('https://sparkmanga.net/wp-admin/admin-ajax.php', { status: () => sparkFail ? 521 : 200, body: async request => {
         const page = Number(new URLSearchParams(await request.text()).get('page'));
+        sparkPages.push(page); sparkFail = page === 61 && !sparkTransient; if (sparkFail) { sparkTransient = true; return '<html>Temporary server failure</html>'; }
         return Array.from({ length: Math.max(0, Math.min(250, 20492 - page * 250)) }, (_, i) => `<div class="page-item-detail"><div data-post-id="${page * 250 + i}"></div><div class="post-title"><h3><a href="https://sparkmanga.net/manga/fixture-${page * 250 + i}/">Fixture ${page * 250 + i}</a></h3></div></div>`).join('');
     } });
     let observed = 0, responseStatus;
@@ -169,6 +171,7 @@
     await sparkIndexer.Start(); const sparkDeadline = Date.now() + 25000;
     while (sparkIndexer.Activity.Value.owned) { if (Date.now() > sparkDeadline) throw new Error('Synthetic MangaSpark catalog did not settle'); await new Promise(resolve => setTimeout(resolve, 10)); }
     record('Native MangaSpark AJAX pagination publishes 20492 isolated titles and reports real page progress and HTTP status', observed === 20492 && responseStatus === 200 && (await browserStore.LoadPersistent(Store.MediaLists, spark.Identifier)).length === 20492);
+    record('Native MangaSpark retries only failed page 61 after a 521 without losing 15250 earlier titles or duplicating final identities', sparkPages.filter(page => page === 61).length === 2 && sparkPages.filter(page => page === 0).length === 1);
     record('A full synthetic MangaSpark refresh still does not prove source completeness', (await catalogRepository.Snapshot()).sites.find(site => site.siteId === spark.Identifier).coverage.state === 'unknown');
     return checks;
 })()

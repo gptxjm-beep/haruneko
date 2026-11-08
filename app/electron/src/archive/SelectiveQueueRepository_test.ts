@@ -43,7 +43,7 @@ describe('Persistent selective queue', () => {
             expect(restarted.Execute({ operation: 'queue-list' })[0]).toMatchObject({ sessionId: null, historyCount: 2, scope: { ids: ['new'] } });
             expect(restarted.Report(row.seq).sessions).toHaveLength(2);
             expect(restarted.Report(row.seq).sessions.every(session => session.history.length > 0)).toBe(true);
-            expect(f.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+            expect(f.db.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
         } finally { f.db.close(); }
     });
     it('Should invalidate a completed queue badge after a disk audit detects a missing file without deleting evidence', () => {
@@ -263,7 +263,7 @@ describe('Persistent selective queue', () => {
             expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='hub_selections'").get()).toBeUndefined();
             db.exec('DROP TABLE hub_queue'); MigrateArchiveDatabase(db);
             expect(db.prepare('SELECT mangas_used,chapters_started FROM archive_runs WHERE session_id=?').get('old')).toMatchObject({ mangas_used: 4, chapters_started: 17 });
-            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
         } finally { db.close(); }
     });
     it('Should freeze the reserve between selective tasks even before a child run has started', () => {

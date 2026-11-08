@@ -39,7 +39,7 @@ async function fixture(catalog = [{ id: 'manga', title: 'Manga' }], schemaVersio
     const manifests = new Map<string, ArchiveChapterManifest>();
     for (const manga of catalog) manifests.set(manga.id, { chapters: [{ id: 'new', title: 'Special', position: 0, language: 'ar' }, { id: 'old', title: '1.5', position: 1, language: 'ar' }], order: 'descending', orderEvidence: 'Fixture newest-first', coverage: complete });
     const scraper = { FetchChapters: vi.fn(async (manga: Manga) => manifests.get(manga.Identifier)!.chapters.map(item => new Chapter(scraper as unknown as MangaScraper, manga, item.id, item.title))) };
-    const site = { Identifier: 'site', Title: 'Site', Tags: { Value: [Tags.Language.Multilingual] }, Entries: { Value: [] }, Update: vi.fn(), Initialize: vi.fn().mockResolvedValue(undefined),
+    const site = { Identifier: 'site', Title: 'Site', URI: new URL('https://fixture.invalid'), Tags: { Value: [Tags.Language.Multilingual] }, Entries: { Value: [] }, Update: vi.fn(), Initialize: vi.fn().mockResolvedValue(undefined),
         CreateEntry: (id: string, title: string) => new Manga(scraper as unknown as MangaScraper, site, id, title) } as unknown as MangaPlugin;
     let intercept: ((command: ArchiveCommand) => void) | undefined;
     let storageFault: ArchiveStorageFault | undefined;
@@ -298,7 +298,7 @@ describe('Smart ArchiveManager with a real isolated SQLite ledger', () => {
         // Inspect the migration before startup recovery legitimately changes Verifying to Interrupted.
         ArchiveSchema.MigrateArchiveDatabase(database);
         const upgraded = database;
-        expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+        expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
         expect(upgraded.prepare('SELECT DISTINCT state FROM archive_work').all()).toEqual([{ state: 'review' }]);
         expect(upgraded.prepare('SELECT ordering,order_evidence FROM archive_manifests').get()).toMatchObject({ ordering: 'unknown', order_evidence: evidence });
         expect(upgraded.prepare('SELECT * FROM session_chapters').all()).toEqual(chapters.map(row => ({ ...row, order_confidence: 'unknown' })));

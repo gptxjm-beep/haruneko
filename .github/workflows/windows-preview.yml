@@ -86,5 +86,5 @@ jobs:
         run: |
           $checksum = Get-Item -LiteralPath '${{ steps.verify.outputs.checksum }}'
           $report = Get-Content app/electron/bundle/preview-smoke-win32.json -Raw | ConvertFrom-Json
-          if ($report.commit -ne '${{ github.sha }}' -or $report.archiveSchema -ne 10) { throw 'Preview source or schema mismatch' }
+          if ($report.commit -ne '${{ github.sha }}' -or $report.archiveSchema -ne 11) { throw 'Preview source or schema mismatch' }
           "## Tested Windows Preview`n`nCommit: $($report.commit)`n`nSQLite schema: $($report.archiveSchema)`n`nEXE checks: $($report.checks.Count)`n`nArtifact: ${{ steps.artifact.outputs.artifact-url }}`n`nSHA-256: $(Get-Content $checksum.FullName -Raw)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

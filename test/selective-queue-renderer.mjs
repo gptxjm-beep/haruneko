@@ -41,6 +41,7 @@
     UI.page = 'arabic-manga'; UI.hubSection = 'search'; UI.selectedPlugin = undefined; UI.selectedMedia = undefined;
     const target = document.createElement('div'); document.body.append(target); const app = mount(App, { target });
     await wait(() => document.querySelector('[data-testid="shared-search-query"]') && !document.querySelector('[data-testid="shared-search-query"]').disabled);
+    [...document.querySelectorAll('label')].find(label => label.textContent.trim() === 'Multi-select').querySelector('input').click(); await tick();
     for (const query of ['One Piece Queue', 'Bleach Queue']) {
         await input(query); const checkbox = document.querySelector('[data-testid="shared-search-result"] input[type=checkbox]'); checkbox.click(); await wait(async () => (await client.Request({ operation: 'queue-summary' })).selected === (query.startsWith('One') ? 1 : 2));
     }
@@ -48,18 +49,19 @@
     record('Selections persist across different searches and sources while direct addition is independent', (await queue.Selections()).map(ref => ref.mangaId).join(',') === 'one,bleach' && (await queue.List())[0].mangaId === 'berserk');
     await wait(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Saved selections (2)'));
     await click('Saved selections (2)');
-    await wait(() => document.querySelectorAll('[data-testid="personal-selections"] [data-testid="personal-entry"]').length === 2);
+    await wait(() => document.querySelectorAll('[data-testid="selection-cart"] [data-testid="personal-entry"]').length === 2);
     record('Saved selections open inside Search without replacing its query or data', UI.hubSection === 'search' && document.querySelector('[data-testid="shared-search-query"]').value === 'Berserk Queue' && (await queue.Selections()).length === 2);
     await click('Saved selections (2)');
-    await click('Add Selected to Queue'); await wait(async () => (await queue.List()).length === 3);
+    await click('Add Selected to Downloads'); await wait(async () => (await queue.List()).length === 3);
     await queue.Add(refs[0]);
     record('Bulk and individual additions share one queue, preserve first selection order and never start a download', (await queue.List()).map(ref => ref.mangaId).join(',') === 'berserk,one,bleach' && images === 0 && catalogs === 0);
-    await input('One Piece Queue'); await wait(() => document.querySelector('[data-testid="shared-search-result"] input').checked);
-    record('Returning to a previous search distinguishes independent selection and queue membership', queue.State.Value.flags[QueueIdentity(refs[0])] === true && document.querySelector('[data-testid="shared-search-result"]').textContent.includes('Added to downloads'));
+    await input('One Piece Queue'); await wait(() => !document.querySelector('[data-testid="shared-search-result"] input').checked);
+    record('Transferred cart entries clear while original download membership remains', (await queue.Selections()).length === 0 && document.querySelector('[data-testid="shared-search-result"]').textContent.includes('Added to downloads'));
+    document.querySelector('[data-testid="shared-search-result"] input').click(); await wait(async () => (await queue.Selections()).length === 1);
     await SaveManualMediaList(a.Identifier, [{ id: 'berserk', title: 'Berserk Queue' }]);
     UI.hubSection = 'selections'; await tick();
-    await wait(() => document.querySelector('[data-testid="personal-selections"]')?.textContent.includes('missing from the current catalog'));
-    record('A disappeared accepted reference is retained in selection review with a warning', (await queue.Selections()).length === 2);
+    await wait(() => document.querySelector('[data-testid="selection-cart"]')?.textContent.includes('missing from the current catalog'));
+    record('A disappeared accepted reference is retained in selection review with a warning', (await queue.Selections()).length === 1);
     let releasePreviewCache, previewCacheCaptured = false, previewCacheFinished = false;
     const previewCacheGate = new Promise(resolve => { releasePreviewCache = resolve; });
     const originalPreviewLoad = StorageControllerBrowser.prototype.LoadPersistent;
@@ -106,7 +108,7 @@
     for (const [mangaId, title] of [['unknown', 'Unknown Order Queue'], ['bad', 'Invalid Image Queue'], ['extra', 'Over Budget Queue']]) await queue.Add({ siteId: a.Identifier, mangaId, title, siteName: a.Title });
     const grant = await client.Request({ operation: 'choose-root' }), defaults = await client.Request({ operation: 'ui-preferences' });
     await click('Start Downloads / Resume…'); await wait(() => document.querySelector('[data-testid="queue-setup"]'));
-    record('The actual queue UI accurately explains equivalent All and Missing and the SQLite downgrade restriction', document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing currently use the same') && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v10'));
+    record('The actual queue UI accurately explains equivalent All and Missing and the SQLite downgrade restriction', document.querySelector('[data-testid="queue-scope-notice"]').textContent.includes('All and Missing currently use the same') && document.querySelector('[data-testid="personal-queue"]').textContent.includes('SQLite v11'));
     record('Start requires an explicit setup confirmation and exposes the frozen development limits', [...document.querySelectorAll('[data-testid="queue-setup"] button')].find(button => button.textContent.trim() === 'Start Downloads').disabled && document.querySelector('[data-testid="queue-budget"]').textContent.includes('/20'));
     // Edit only this queue's setup. General archiving and manual download defaults must remain untouched.
     for (const [label, value] of [['Delay between requests', '100'], ['Retry delay', '1000'], ['Maximum attempts', '1'], ['Languages', 'ar']]) {
@@ -144,6 +146,33 @@
     record('Real native details publication saves a separate valid cover receipt without changing chapter completion or cumulative budget', detailResult === 'Saved' && detailsHealth.coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed' && (await client.Request({ operation: 'queue-summary' })).chaptersStarted === summary.chaptersStarted);
     await client.Request({ operation: 'queue-details-save', seq: detailsItem.seq, text: 'Known optional details', cover: new TextEncoder().encode('<html>not an image</html>'), extension: 'png', partial: false });
     record('Native optional-cover validation rejects HTML while preserving the healthy cover and chapter receipts', (await client.Request({ operation: 'queue-details-inspect', seq: detailsItem.seq })).coverHealthy && (await queue.List()).find(row => row.seq === detailsItem.seq).state === 'Completed');
+    await wait(() => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'))?.textContent.includes('Edit Manga Info'));
+    const infoCard = () => [...document.querySelectorAll('[data-testid="personal-entry"]')].find(card => card.textContent.includes('Berserk Queue'));
+    [...infoCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Open Folder').click();
+    await wait(async () => ipcRenderer.invoke('QueueTest::FolderOpened'));
+    record('Open Folder resolves the actual manga directory through trusted native archive identity, without renderer paths', true);
+    [...infoCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Edit Manga Info').click();
+    await wait(() => infoCard().querySelector('[data-testid="manga-info-editor"]'));
+    const editor = () => infoCard().querySelector('[data-testid="manga-info-editor"]');
+    const titleField = [...editor().querySelectorAll('label')].find(label => label.textContent.trim() === 'Title').querySelector('input'); titleField.value = 'Edited local story'; titleField.dispatchEvent(new Event('input', { bubbles: true }));
+    const storyField = editor().querySelector('textarea'); storyField.value = 'Story edited in the native UI'; storyField.dispatchEvent(new Event('input', { bubbles: true }));
+    [...editor().querySelectorAll('button')].find(button => button.textContent.trim() === 'Choose Cover…').click();
+    await wait(() => editor().textContent.includes('New cover selected'));
+    editor().querySelector('.confirm input').click(); await tick();
+    [...editor().querySelectorAll('button')].find(button => button.textContent.trim() === 'Save Manga Info').click();
+    await wait(() => !infoCard().querySelector('[data-testid="manga-info-editor"]'));
+    const editedOffline = await ipcRenderer.invoke('QueueTest::OfflineDetails');
+    record('Real metadata editor saves title, story and a native-picked cover, regenerates the root HTML offline and preserves source identity', editedOffline.title === 'Edited local story' && editedOffline.text.includes('Story edited in the native UI') && editedOffline.width === 2 && editedOffline.requests === 0 && (await queue.List()).find(row => row.seq === detailsItem.seq).title === detailsItem.title);
+    [...infoCard().querySelectorAll('button')].find(button => button.textContent.trim() === 'Edit Manga Info').click();
+    await wait(() => editor()); await ipcRenderer.invoke('QueueTest::ManualInfoEdit');
+    editor().querySelector('.confirm input').click(); await tick();
+    [...editor().querySelectorAll('button')].find(button => button.textContent.trim() === 'Save Manga Info').click();
+    await wait(() => infoCard().textContent.includes('Files changed outside the editor'));
+    record('A stale information form cannot overwrite a manual JSON edit', !!editor());
+    [...editor().querySelectorAll('button')].find(button => button.textContent.trim() === 'Regenerate from saved JSON').click();
+    await wait(() => !editor());
+    const regenerated = await ipcRenderer.invoke('QueueTest::OfflineDetails');
+    record('Explicit regeneration preserves manually edited JSON and escapes untrusted markup in the offline page', regenerated.title === 'Externally edited title' && regenerated.text.includes('<img src=x onerror=alert(1)>') && regenerated.images === 1 && regenerated.scripts === 0 && regenerated.requests === 0);
     const completed = rows[0], before = images; await queue.Edit(completed.seq, 'remove'); await queue.Add(refs[2]);
     const fresh = (await queue.List()).find(row => row.mangaId === 'berserk');
     record('Readding resets the selection while preserving historical receipts and budget', fresh.sessionId === null && fresh.scope.mode === 'all' && fresh.historyCount === 1);
@@ -191,7 +220,7 @@
     }
     const row15 = (await queue.List()).find(row => row.mangaId === 'preview15');
     record('Real Svelte first-last and last-first previews pin all fifteen original identities, then save 1,2,3 without clone errors', row15.scope.direction === 'descending' && row15.scope.sourceIds[0] === '15' && row15.scope.ids.join(',') === '1,2,3');
-    globalThis.selectiveQueueFixture = { selected: 2, queued: (await queue.List()).length, chaptersStarted: summary.chaptersStarted, chapterSelection: row15.seq };
+    globalThis.selectiveQueueFixture = { selected: (await queue.Selections()).length, queued: (await queue.List()).length, chaptersStarted: summary.chaptersStarted, chapterSelection: row15.seq };
     await unmount(app); target.remove(); HakuNeko.PluginController.WebsitePlugins = originalSites; HakuNeko.DownloadManager = originalDownloads; UI.hubSection = 'sites';
     searchController.Query(originalPreference, 0); searchController.SetActive(originalPreference.active); await searchController.Flush();
     return checks;

@@ -45,11 +45,11 @@
     sidebar.click(); await tick();
     await wait(() => document.querySelector('[data-testid="arabic-manga-hub"]')?.checkVisibility());
     record('Hub opens as a full page without a selected plugin even when the content panel is disabled', UI.selectedPlugin === undefined && !media.checkVisibility() && document.querySelector('#ArabicManga').clientWidth > 800);
-    record('Search is the default hub page and only three main sections are shown', !!document.querySelector('[data-testid="shared-search"]') && document.querySelector('#ArabicManga nav').textContent.replace(/\s+/g,' ').trim() === 'Search Sites Downloads');
+    record('Search is the default hub page and four requested sections are shown', !!document.querySelector('[data-testid="shared-search"]') && document.querySelector('#ArabicManga nav').textContent.replace(/\s+/g,' ').trim() === 'Sites Search Explorer Downloads');
     await click('Sites');
     const ids = () => [...document.querySelectorAll('[data-testid="arabic-site"]')].map(el => el.dataset.siteId);
     record('Arabic tags show English-named Arabic sites and exclude Arabic-named English and multilingual-only sites', ids().join(',') === 'hub-both,hub-ar');
-    record('Unknown health is explicit and future sections have no fake action buttons', document.querySelector('#ArabicManga').textContent.includes('No live health check') && document.querySelector('#ArabicManga nav').querySelectorAll('button').length === 3 && document.querySelector('#ArabicManga nav').querySelectorAll('a').length === 0);
+    record('Unknown health is explicit and future sections have no fake action buttons', document.querySelector('#ArabicManga').textContent.includes('No live health check') && document.querySelector('#ArabicManga nav').querySelectorAll('button').length === 4 && document.querySelector('#ArabicManga nav').querySelectorAll('a').length === 0);
     const search = document.querySelector('[data-testid="arabic-site-filter"]');
     await input(search, 'arabic.invalid');
     record('Hub filters sites by host', ids().join(',') === 'hub-ar');

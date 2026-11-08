@@ -81,7 +81,7 @@ describe('Main-process archiving preferences and UI receipts', () => {
             expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(5);
             db.exec('DROP TABLE archive_ui_preferences');
             MigrateArchiveDatabase(db);
-            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+            expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
         } finally { db.close(); }
     });
     it('Should redact URLs, signed paths, credentials and native paths from public diagnostics', () => {

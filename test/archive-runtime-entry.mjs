@@ -345,7 +345,7 @@ if (process.argv[2] === 'crash-child') {
             db.exec('ALTER TABLE attempt_files DROP COLUMN receipt_size');
             db.close();
             const upgraded = new ArchiveRepository(filename);
-            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 10);
+            assert.equal(upgraded.database.prepare('PRAGMA user_version').get().user_version, 11);
             upgraded.Close();
         } finally { await fs.rm(base, { recursive: true, force: true }); }
     });

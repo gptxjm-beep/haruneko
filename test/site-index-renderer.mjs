@@ -130,6 +130,24 @@
     await wait(() => catalogCalls === beforeSingle + 1 && !controller.Activity.Value.owned);
     record('A site card Update commits only that connector through the shared updater without fetching content', controller.State.Value.job.items.length === 1 && controller.State.Value.job.items[0].siteId === plugin.Identifier && await saved(other.Identifier) === undefined && contentCalls === 0);
     await unmount(hub); target.remove();
+    // Persist six separate deferred sites in actual IndexedDB; fixture errors represent confirmed detection, not a network timeout.
+    const { CatalogVerificationRequired } = await import('/src/engine/catalog/CatalogVerification.ts');
+    const verificationCalls = new Map();
+    const pending = Array.from({ length: 6 }, (_, n) => ({ id: `index-verify-${n}`, Catalog: async function* () {
+        const count = (verificationCalls.get(n) ?? 0) + 1; verificationCalls.set(n, count);
+        if (count === 1) throw new CatalogVerificationRequired(); yield { items: entries(`verified-${n}`), terminal: true, coverage: unknown };
+    } }));
+    await run([...pending, source('index-after-verification', entries('normal'))]);
+    const reopened = new SiteIndexRepository();
+    record('Six deferred verification states persist in real IndexedDB while the normal source finishes and retry budgets stay intact', (await reopened.Snapshot()).job.state === 'waiting' && (await reopened.Snapshot()).job.items.filter(item => item.state === 'verification' && item.attempts === 0).length === 6 && (await saved('index-after-verification'))[0].id === 'normal');
+    await reopened.VerificationReady('index-verify-2'); await reopened.Interrupt();
+    record('Reopening revalidates deferred session readiness instead of trusting stale browser cookies', (await reopened.Snapshot()).job.items.find(item => item.siteId === 'index-verify-2').state === 'verification');
+    await reopened.VerificationReady('index-verify-2');
+    const retry = new SiteIndexManager(reopened, () => pending, navigator.locks, { timeoutMs: 30000, delayMs: 1, retryMs: 1 });
+    await retry.Resume(); await wait(() => !retry.Activity.Value.owned);
+    record('Only an explicitly ready deferred source retries after resume, leaving the other five waiting', verificationCalls.get(2) === 2 && verificationCalls.get(0) === 1 && (await reopened.Snapshot()).job.items.filter(item => item.state === 'verification').length === 5);
+    await retry.Stop(true); await reopened.VerificationReady('index-verify-0');
+    record('Cancelling a verification batch prevents a late ready marker from reviving it', (await reopened.Snapshot()).job.state === 'cancelled' && (await reopened.Snapshot()).job.items.every(item => item.state !== 'ready'));
     // Leave a real interrupted job for the native harness to recover after destroying the renderer.
     const recovery = await repository.Start(['index-recovery-a', 'index-recovery-b']);
     const first = await repository.Begin(recovery.id, 'index-recovery-a'); await repository.Stage(first, 0, entries('a')); await repository.Publish(first, entries('a'), complete);
